@@ -185,7 +185,15 @@ class TelemetryStream:
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            # This swallow is for the awaited task's cancellation result
+            # only. A caller that is itself cancelled while parked on
+            # ``await task`` (e.g. a timed-out ``wait_for(stop(), ...)``)
+            # must see its own CancelledError propagate — absorbing it
+            # would report "stopped" for a stream that may still be
+            # running.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
         except Exception:
             # Already logged by the done-callback tripwire; stop() never
             # raises on a task that died before it was stopped.

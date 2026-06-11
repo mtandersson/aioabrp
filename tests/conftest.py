@@ -28,17 +28,22 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from aioabrp.auth import AbstractAuth, StaticAuth
+from aioabrp.const import HEADER_ABRP_SESSION
 from aioabrp.models import ConnectionEvent, ConnectionState, Metric, MetricValue
 from aioabrp.stream import TelemetryStream
 
 # Upper bound for every wait helper below. Generous next to the tiny
 # injected stream timings, so a healthy run never gets near it while a
 # hung test still fails fast.
-_WAIT_TIMEOUT = 5.0
+WAIT_TIMEOUT = 5.0
 
 # One scripted server action: ("frame", dict) | ("raw", bytes)
 # | ("sleep", seconds) | ("close", None) | ("status", int).
 SseAction = tuple[str, Any]
+
+# The shape of the ``stream_factory`` fixture's return value, shared by
+# every stream test module.
+StreamFactory = Callable[..., TelemetryStream]
 
 
 @dataclass
@@ -69,12 +74,37 @@ class SseRequest:
 
 
 class SseServerHarness:
-    """Scripted local SSE server: per-connection scripts + request capture."""
+    """Scripted local SSE server: per-connection scripts + request capture.
+
+    Script selection: when the connection's ``X-ABRP-SESSION`` header has
+    an entry in ``scripts_by_session``, that per-session list serves the
+    attempt (multi-account isolation tests script each account
+    independently); otherwise the shared ``scripts`` list is used. Both
+    lists share the same pop semantics: one script per connection
+    attempt, the last script reused once the list is exhausted.
+    """
 
     def __init__(self) -> None:
         self.scripts: list[SseScript] = []
+        self.scripts_by_session: dict[str, list[SseScript]] = {}
         self.requests: list[SseRequest] = []
         self._changed = asyncio.Event()
+
+    def _next_script(self, request: web.Request) -> SseScript | None:
+        """Pop the next script for this connection (per-session aware)."""
+        session_token = request.headers.get(HEADER_ABRP_SESSION, "")
+        scripts = self.scripts_by_session.get(session_token, self.scripts)
+        if not scripts:
+            return None
+        return scripts.pop(0) if len(scripts) > 1 else scripts[0]
+
+    def requests_for_session(self, session_token: str) -> list[SseRequest]:
+        """Return the captured requests carrying this session token."""
+        return [
+            request
+            for request in self.requests
+            if request.headers.get(HEADER_ABRP_SESSION) == session_token
+        ]
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         """Serve one connection attempt from the next script."""
@@ -82,9 +112,9 @@ class SseServerHarness:
             SseRequest(headers=dict(request.headers), query=dict(request.query))
         )
         self._changed.set()
-        if not self.scripts:
+        script = self._next_script(request)
+        if script is None:
             return web.Response(status=500)
-        script = self.scripts.pop(0) if len(self.scripts) > 1 else self.scripts[0]
         response: web.StreamResponse | None = None
         for action, payload in script.actions:
             if action == "status":
@@ -115,7 +145,7 @@ class SseServerHarness:
 
     async def wait_for_requests(self, count: int) -> None:
         """Wait (bounded) until the server saw ``count`` connection attempts."""
-        async with asyncio.timeout(_WAIT_TIMEOUT):
+        async with asyncio.timeout(WAIT_TIMEOUT):
             while len(self.requests) < count:
                 self._changed.clear()
                 await self._changed.wait()
@@ -171,7 +201,7 @@ class CallbackRecorder:
 
     Every recorded callback sets the internal :class:`asyncio.Event`, so
     the ``wait_for_*`` helpers wake exactly when progress happens (no
-    polling sleeps) and time out via ``_WAIT_TIMEOUT`` when it doesn't.
+    polling sleeps) and time out via ``WAIT_TIMEOUT`` when it doesn't.
     """
 
     def __init__(self) -> None:
@@ -193,14 +223,14 @@ class CallbackRecorder:
 
     async def wait_for_updates(self, count: int) -> None:
         """Wait (bounded) until ``count`` on_update calls were recorded."""
-        async with asyncio.timeout(_WAIT_TIMEOUT):
+        async with asyncio.timeout(WAIT_TIMEOUT):
             while len(self.updates) < count:
                 self._changed.clear()
                 await self._changed.wait()
 
     async def wait_for_state(self, state: ConnectionState, count: int = 1) -> None:
         """Wait (bounded) until ``state`` has been observed ``count`` times."""
-        async with asyncio.timeout(_WAIT_TIMEOUT):
+        async with asyncio.timeout(WAIT_TIMEOUT):
             while self.states.count(state) < count:
                 self._changed.clear()
                 await self._changed.wait()
@@ -234,10 +264,18 @@ def recorder() -> CallbackRecorder:
 
 @pytest.fixture
 async def stream_factory(
+    sse_server: SseServerHarness,
     websession: aiohttp.ClientSession,
     recorder: CallbackRecorder,
-) -> AsyncIterator[Callable[..., TelemetryStream]]:
-    """Build streams wired to the recorder; auto-stop them on teardown."""
+) -> AsyncIterator[StreamFactory]:
+    """Build streams wired to the recorder; auto-stop them on teardown.
+
+    Depends on ``sse_server`` purely for the fixture graph: it pins the
+    teardown order (every created stream is stopped before the local
+    server closes) and guarantees the factory can never run without the
+    ``API_BASE_V2`` monkeypatch in place — a stream built without it
+    would dial the real ABRP API.
+    """
     created: list[TelemetryStream] = []
 
     def factory(
@@ -248,14 +286,18 @@ async def stream_factory(
         name: str | None = None,
         backoff: Sequence[float] = (0.05, 0.1),
         watchdog_seconds: float = 5.0,
+        on_update: Callable[[int, dict[Metric, MetricValue]], None] | None = None,
+        on_connection_change: Callable[[ConnectionEvent], None] | None = None,
     ) -> TelemetryStream:
         stream = TelemetryStream(
             websession,
             api_key,
             auth if auth is not None else StaticAuth("stream-token"),
             vehicle_ids if vehicle_ids is not None else [1],
-            recorder.on_update,
-            recorder.on_connection_change,
+            on_update if on_update is not None else recorder.on_update,
+            on_connection_change
+            if on_connection_change is not None
+            else recorder.on_connection_change,
             name=name,
             backoff=backoff,
             watchdog_seconds=watchdog_seconds,
