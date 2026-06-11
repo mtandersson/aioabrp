@@ -227,6 +227,40 @@ async def test_stop_during_backoff_returns_promptly(
     await asyncio.wait_for(stream.stop(), timeout=1.0)
 
 
+async def test_start_after_stop_restarts_and_keeps_monotonicity_gate(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+) -> None:
+    sse_server.scripts = [
+        SseScript([("frame", build_frame(1, soc=0.5, time=T2)), ("sleep", 30)]),
+        SseScript(
+            [
+                # Strictly older than the pre-restart T2: still dropped —
+                # the gate spans the stream's LIFETIME, not one start().
+                ("frame", build_frame(1, soc=0.1, time=T1)),
+                # Equal-time re-emit proves the restarted stream delivers.
+                ("frame", build_frame(1, soc=0.6, time=T2)),
+                ("sleep", 30),
+            ]
+        ),
+    ]
+    stream = stream_factory()
+    await stream.start()
+    await recorder.wait_for_updates(1)
+    await asyncio.wait_for(stream.stop(), timeout=1.0)
+
+    # start() after stop() restarts the stream (new connection attempt).
+    await stream.start()
+    await recorder.wait_for_updates(2)
+
+    assert len(sse_server.requests) == 2
+    assert recorder.states.count(ConnectionState.CONNECTED) == 2
+    # The T1 frame produced no update: only the T2 adopts surfaced.
+    values = [metrics[Metric.SOC].value for _, metrics in recorder.updates]
+    assert values == [50.0, 60.0]
+
+
 async def test_stop_before_start_and_double_stop(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,

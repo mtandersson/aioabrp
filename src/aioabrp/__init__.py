@@ -1,6 +1,7 @@
 """Async Python client for the A Better Routeplanner (ABRP) / Iternio telemetry API."""
 
 from .auth import AbstractAuth, StaticAuth
+from .client import AbrpClient
 from .exceptions import AbrpApiError, AbrpAuthError, AbrpError
 from .models import (
     AbrpVehicle,
@@ -12,12 +13,14 @@ from .models import (
     Metric,
     MetricValue,
 )
+from .stream import TelemetryStream
 
 __version__ = "0.1.0"
 
 __all__ = [
     "AbrpApiError",
     "AbrpAuthError",
+    "AbrpClient",
     "AbrpError",
     "AbrpVehicle",
     "AbstractAuth",
@@ -29,5 +32,6 @@ __all__ = [
     "Metric",
     "MetricValue",
     "StaticAuth",
+    "TelemetryStream",
     "__version__",
 ]

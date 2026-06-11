@@ -51,6 +51,12 @@ path = "src/aioabrp/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/aioabrp"]
 
+[tool.hatch.build.targets.sdist]
+# Local-only planning files are untracked via .git/info/exclude, which
+# hatchling (unlike .gitignore) does not honor — exclude them explicitly
+# so they never ship in the sdist.
+exclude = ["PLAN.md", "docs/"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py314"
