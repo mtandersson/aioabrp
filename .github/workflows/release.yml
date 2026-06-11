@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC).
+      id-token: write
+      # Required to create the GitHub release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # Full history + tags so git-cliff can compute release notes.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # `uv version --short` cannot read hatchling dynamic versions, so ask
+      # the package itself (src/aioabrp/__init__.py is the single source).
+      - name: Check tag matches project version
+        run: test "v$(uv run python -c 'import aioabrp; print(aioabrp.__version__)')" = "${GITHUB_REF_NAME}"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Generate release notes from conventional commits
+        run: uv tool run git-cliff --latest --strip all -o "${RUNNER_TEMP}/RELEASE_NOTES.md"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" dist/*
+          --title "${GITHUB_REF_NAME}"
+          --notes-file "${RUNNER_TEMP}/RELEASE_NOTES.md"

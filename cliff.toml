@@ -1,0 +1,35 @@
+# git-cliff configuration — release notes are generated from Conventional
+# Commits (https://www.conventionalcommits.org) by the release workflow.
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{%- endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# Unconventional commits still land in release notes (under "Other") rather
+# than vanishing silently.
+filter_unconventional = false
+protect_breaking_commits = true
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^docs?", group = "<!-- 3 -->Documentation" },
+  { message = "^refactor", group = "<!-- 4 -->Refactoring" },
+  { message = "^test", group = "<!-- 5 -->Testing" },
+  { message = "^(build|ci|chore)", group = "<!-- 6 -->Maintenance" },
+  { message = ".*", group = "<!-- 7 -->Other" },
+]
