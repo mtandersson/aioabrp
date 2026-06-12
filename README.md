@@ -141,9 +141,21 @@ the last adopted block timestamp.
 - A **time-less** block (missing/malformed/naive `time`) is adopted and
   **clears** the gate for that metric — it carries no ordering claim, so it
   also stops gating subsequent values.
+- A block whose `time` is in the **future** is rewritten to "now" before
+  delivery (and before gating), so a clock-skewed upstream stamp can neither
+  be delivered to the consumer nor become an unreachable high-water mark that
+  silently stalls the metric. `AbrpClient.async_get_current_telemetry` applies
+  the same clamp (it does not gate).
 - **Known limitation:** a legitimately backdated server correction (an
   older timestamp that really is a newer truth) is suppressed for the
   stream's lifetime.
+
+The gate can be **pre-warmed** across process restarts: pass
+`TelemetryStream(..., seed=dict[int, Telemetry])` (e.g. the consumer's last
+persisted snapshot) and the stream seeds its high-water marks from the seed's
+block times — timestamps only, clamped not-future; the seed values themselves
+are not retained. The clock is the `aioabrp._clock._now` seam (the monkeypatch
+target in tests).
 
 ### Logging
 
