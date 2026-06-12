@@ -13,7 +13,7 @@ keyword heuristic on the ``error`` text.
 
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
 from unittest.mock import Mock
@@ -23,6 +23,7 @@ import pytest
 from aioresponses import aioresponses
 from yarl import URL
 
+import aioabrp._clock as _clock
 from aioabrp.auth import AbstractAuth, StaticAuth
 from aioabrp.client import AbrpClient
 from aioabrp.const import (
@@ -697,6 +698,36 @@ async def test_get_current_telemetry_happy_path_typed(
         Metric.CHARGING_STATE,
         Metric.LOCATION,
     }
+
+
+async def test_one_shot_clamps_future_block_time(
+    client: AbrpClient, mock_api: aioresponses, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A future-dated one-shot block time is clamped to now (stateless).
+
+    The one-shot getter does no monotonicity gating, but a future wire
+    ``time`` must not escape the lib — a future-dated snapshot fed back
+    as a stream seed would otherwise poison the gate. The clock seam is
+    patched via the module attribute so the clamp site's
+    ``_clock._now()`` read sees the fixed ``now``.
+    """
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(_clock, "_now", lambda: now)
+    future = now + timedelta(hours=6)
+    payload = {
+        "soc": {
+            "frac": 0.5,
+            "time": future.isoformat().replace("+00:00", "Z"),
+            "provider": "RIVIAN_STREAM",
+        },
+    }
+    mock_api.get(ONE_SHOT_URL, payload=payload)
+
+    result = await client.async_get_current_telemetry(VEHICLE_ID)
+
+    assert result.soc is not None
+    assert result.soc.value == 50.0
+    assert result.soc.time == now
 
 
 async def test_get_current_telemetry_empty_payload(

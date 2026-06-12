@@ -34,6 +34,12 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
+# ``_clock`` is imported as a module (not ``from ._clock import _now``) so the
+# clamp site reads ``_clock._now()`` via attribute access — tests monkeypatch
+# ``aioabrp._clock._now`` and a name-bound import would capture the original
+# lambda and defeat the patch. Do not "clean up" to a name-bound import.
+from . import _clock
+from ._clock import clamp_future_times
 from ._extract import extract_metrics
 from .auth import AbstractAuth
 from .const import (
@@ -195,7 +201,10 @@ class AbrpClient:
         so the result is the same typed :class:`~aioabrp.models.Telemetry`
         shape a telemetry stream's ``on_update`` delivers. No
         monotonicity gating happens here — any seeding/merge policy
-        against stream events belongs to the consumer.
+        against stream events belongs to the consumer — but future block
+        times ARE clamped to now (same as the stream), so a future-dated
+        snapshot cannot escape the lib or poison a stream's gate when fed
+        back as a seed.
 
         Raises:
             AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
@@ -211,6 +220,10 @@ class AbrpClient:
             payload,
             unknown_charging_states_seen=self._unknown_charging_states_seen,
         )
+        # No gating here (stateless one-shot), but future block times are
+        # clamped to now — same as the stream — so a future-dated snapshot
+        # cannot escape the lib and is safe to feed back as a stream seed.
+        extracted = clamp_future_times(extracted, _clock._now())
         return Telemetry(**{metric.value: value for metric, value in extracted.items()})
 
     async def _get_v2_json(self, url: str, *, what: str) -> dict[str, Any]:
