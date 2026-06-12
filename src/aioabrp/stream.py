@@ -46,7 +46,7 @@ from typing import Any
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from . import _clock
-from ._clock import clamp_future_times
+from ._clock import _clamp_time, clamp_future_times
 from ._extract import extract_metrics
 from ._sse import iter_sse_events, parse_sse_event
 from .auth import AbstractAuth
@@ -125,8 +125,16 @@ class TelemetryStream:
         name: str | None = None,
         backoff: Sequence[float] = DEFAULT_BACKOFF_SECONDS,
         watchdog_seconds: float = DEFAULT_WATCHDOG_SECONDS,
+        seed: dict[int, Telemetry] | None = None,
     ) -> None:
-        """Initialize the stream; no I/O happens until :meth:`start`."""
+        """Initialize the stream; no I/O happens until :meth:`start`.
+
+        ``seed`` is an optional per-vehicle :class:`Telemetry` snapshot
+        whose block times warm the monotonicity gate so a reconnect does
+        not re-deliver values already seen before the process restarted.
+        Only the timestamps are used (each clamped not-future); the seed
+        values themselves are not retained.
+        """
         if not backoff:
             raise ValueError("backoff must contain at least one delay")
         self._websession = websession
@@ -143,7 +151,17 @@ class TelemetryStream:
         self._stopped = False
         # Per-(vehicle_id, Metric) tz-aware block time of the most recent
         # adopted value — the monotonicity gate (see _gate_metrics).
+        # Optionally warmed from a consumer-supplied seed (timestamps only;
+        # clamped so a future seed time cannot wrongly gate later frames).
         self._last_times: dict[tuple[int, Metric], datetime] = {}
+        if seed:
+            now = _clock._now()
+            for vehicle_id, telemetry in seed.items():
+                for metric, mv in telemetry.items():
+                    if mv.time is not None:
+                        self._last_times[(vehicle_id, metric)] = _clamp_time(
+                            mv.time, now
+                        )
         # Instance-scoped dedup set for the unrecognized-chargingState
         # warning (never module-global — multi-account safety).
         self._unknown_charging_states_seen: set[str] = set()

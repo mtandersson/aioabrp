@@ -288,6 +288,7 @@ async def stream_factory(
         watchdog_seconds: float = 5.0,
         on_update: Callable[[int, Telemetry], None] | None = None,
         on_connection_change: Callable[[ConnectionEvent], None] | None = None,
+        seed: dict[int, Telemetry] | None = None,
     ) -> TelemetryStream:
         stream = TelemetryStream(
             websession,
@@ -301,6 +302,7 @@ async def stream_factory(
             name=name,
             backoff=backoff,
             watchdog_seconds=watchdog_seconds,
+            seed=seed,
         )
         created.append(stream)
         return stream

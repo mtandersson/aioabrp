@@ -375,3 +375,90 @@ async def test_future_time_does_not_poison_the_gate(
 
     values = [m.soc.value for _, m in recorder.updates if m.soc]
     assert values == [50.0, 60.0]
+
+
+async def test_seed_warms_gate_drops_older_than_seed(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
+    sse_server.scripts = [
+        SseScript(
+            [
+                (
+                    "frame",
+                    build_frame(1, soc=0.1, time=T1),
+                ),  # T1 (10:00) < seed T2: dropped
+                (
+                    "frame",
+                    build_frame(1, soc=0.9, time=T2),
+                ),  # == seed T2: adopted (re-emit)
+                ("sleep", 30),
+            ]
+        )
+    ]
+    seed = {1: Telemetry(soc=MetricValue(value=50.0, time=T2_DT, provider="P"))}
+    stream = stream_factory(seed=seed)
+    await stream.start()
+    await recorder.wait_for_updates(1)
+    await asyncio.sleep(0.1)
+
+    values = [m.soc.value for _, m in recorder.updates if m.soc]
+    assert values == [90.0]  # the T1 frame was gated out by the seed
+
+
+async def test_seed_future_time_is_validated_to_now(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
+    # A frame stamped exactly at NOW (12:00). If the seed's future 18:00 stamp
+    # were stored verbatim, this frame (12:00 < 18:00) would be wrongly
+    # dropped. It is adopted only because the seed time was clamped to NOW,
+    # making the frame equal-time (adopted by design).
+    seed_future = datetime(2026, 6, 11, 18, 0, 0, tzinfo=UTC)
+    sse_server.scripts = [
+        SseScript(
+            [
+                ("frame", build_frame(1, soc=0.6, time="2026-06-11T12:00:00+00:00")),
+                ("sleep", 30),
+            ]
+        )
+    ]
+    seed = {1: Telemetry(soc=MetricValue(value=50.0, time=seed_future, provider=None))}
+    stream = stream_factory(seed=seed)
+    await stream.start()
+    await recorder.wait_for_updates(1)
+
+    values = [m.soc.value for _, m in recorder.updates if m.soc]
+    assert values == [60.0]
+
+
+async def test_seed_is_per_vehicle_isolated(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
+    sse_server.scripts = [
+        SseScript(
+            [
+                # Vehicle 2 has NO seed: an older-looking T1 frame still adopts.
+                ("frame", build_frame(2, soc=0.3, time=T1)),
+                ("sleep", 30),
+            ]
+        )
+    ]
+    seed = {1: Telemetry(soc=MetricValue(value=50.0, time=T2_DT, provider=None))}
+    stream = stream_factory(vehicle_ids=[1, 2], seed=seed)
+    await stream.start()
+    await recorder.wait_for_updates(1)
+
+    vid, tlm = recorder.updates[0]
+    assert vid == 2
+    assert tlm.soc.value == 30.0  # vehicle 1's seed did not gate vehicle 2
