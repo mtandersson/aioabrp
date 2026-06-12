@@ -38,7 +38,7 @@ one session — never share state.
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from datetime import datetime
 from http import HTTPStatus
 from typing import Any
@@ -125,15 +125,16 @@ class TelemetryStream:
         name: str | None = None,
         backoff: Sequence[float] = DEFAULT_BACKOFF_SECONDS,
         watchdog_seconds: float = DEFAULT_WATCHDOG_SECONDS,
-        seed: dict[int, Telemetry] | None = None,
+        seed: Mapping[int, Mapping[Metric, datetime]] | None = None,
     ) -> None:
         """Initialize the stream; no I/O happens until :meth:`start`.
 
-        ``seed`` is an optional per-vehicle :class:`Telemetry` snapshot
-        whose block times warm the monotonicity gate so a reconnect does
-        not re-deliver values already seen before the process restarted.
-        Only the timestamps are used (each clamped not-future); the seed
-        values themselves are not retained.
+        ``seed`` is an optional per-vehicle mapping of
+        :class:`~aioabrp.models.Metric` to the last wire-block time
+        (tz-aware) seen for it, used to warm the monotonicity gate so a
+        reconnect does not re-deliver values already seen before the
+        process restarted. Each time is clamped not-future against a
+        single clock read; only times are needed (no typed values).
         """
         if not backoff:
             raise ValueError("backoff must contain at least one delay")
@@ -156,12 +157,9 @@ class TelemetryStream:
         self._last_times: dict[tuple[int, Metric], datetime] = {}
         if seed:
             now = _clock._now()
-            for vehicle_id, telemetry in seed.items():
-                for metric, mv in telemetry.items():
-                    if mv.time is not None:
-                        self._last_times[(vehicle_id, metric)] = _clamp_time(
-                            mv.time, now
-                        )
+            for vehicle_id, times in seed.items():
+                for metric, wire_time in times.items():
+                    self._last_times[(vehicle_id, metric)] = _clamp_time(wire_time, now)
         # Instance-scoped dedup set for the unrecognized-chargingState
         # warning (never module-global — multi-account safety).
         self._unknown_charging_states_seen: set[str] = set()

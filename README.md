@@ -151,11 +151,12 @@ the last adopted block timestamp.
   stream's lifetime.
 
 The gate can be **pre-warmed** across process restarts: pass
-`TelemetryStream(..., seed=dict[int, Telemetry])` (e.g. the consumer's last
-persisted snapshot) and the stream seeds its high-water marks from the seed's
-block times — timestamps only, clamped not-future; the seed values themselves
-are not retained. The clock is the `aioabrp._clock._now` seam (the monkeypatch
-target in tests).
+`TelemetryStream(..., seed=Mapping[int, Mapping[Metric, datetime]])` — a
+per-vehicle map of metric to its last wire-block time (e.g. derived from the
+consumer's last persisted snapshot) — and the stream seeds its high-water marks
+from those times, each clamped not-future. Only times are needed; no typed
+values. The clock is the `aioabrp._clock._now` seam (the monkeypatch target in
+tests).
 
 ### Logging
 

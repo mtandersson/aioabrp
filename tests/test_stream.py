@@ -16,7 +16,7 @@ from conftest import CallbackRecorder, SseScript, SseServerHarness, build_frame
 import aioabrp._clock as _clock
 from aioabrp.auth import AbstractAuth
 from aioabrp.exceptions import AbrpAuthError
-from aioabrp.models import ConnectionState, MetricValue, Telemetry
+from aioabrp.models import ConnectionState, Metric, MetricValue, Telemetry
 from aioabrp.stream import TelemetryStream
 
 T1 = "2026-06-11T10:00:00+00:00"
@@ -399,7 +399,7 @@ async def test_seed_warms_gate_drops_older_than_seed(
             ]
         )
     ]
-    seed = {1: Telemetry(soc=MetricValue(value=50.0, time=T2_DT, provider="P"))}
+    seed = {1: {Metric.SOC: T2_DT}}
     stream = stream_factory(seed=seed)
     await stream.start()
     await recorder.wait_for_updates(1)
@@ -429,7 +429,7 @@ async def test_seed_future_time_is_validated_to_now(
             ]
         )
     ]
-    seed = {1: Telemetry(soc=MetricValue(value=50.0, time=seed_future, provider=None))}
+    seed = {1: {Metric.SOC: seed_future}}
     stream = stream_factory(seed=seed)
     await stream.start()
     await recorder.wait_for_updates(1)
@@ -454,7 +454,7 @@ async def test_seed_is_per_vehicle_isolated(
             ]
         )
     ]
-    seed = {1: Telemetry(soc=MetricValue(value=50.0, time=T2_DT, provider=None))}
+    seed = {1: {Metric.SOC: T2_DT}}
     stream = stream_factory(vehicle_ids=[1, 2], seed=seed)
     await stream.start()
     await recorder.wait_for_updates(1)

@@ -18,8 +18,9 @@ performs that monkeypatch itself.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -29,7 +30,7 @@ from aiohttp.test_utils import TestServer
 
 from aioabrp.auth import AbstractAuth, StaticAuth
 from aioabrp.const import HEADER_ABRP_SESSION
-from aioabrp.models import ConnectionEvent, ConnectionState, Telemetry
+from aioabrp.models import ConnectionEvent, ConnectionState, Metric, Telemetry
 from aioabrp.stream import TelemetryStream
 
 # Upper bound for every wait helper below. Generous next to the tiny
@@ -288,7 +289,7 @@ async def stream_factory(
         watchdog_seconds: float = 5.0,
         on_update: Callable[[int, Telemetry], None] | None = None,
         on_connection_change: Callable[[ConnectionEvent], None] | None = None,
-        seed: dict[int, Telemetry] | None = None,
+        seed: Mapping[int, Mapping[Metric, datetime]] | None = None,
     ) -> TelemetryStream:
         stream = TelemetryStream(
             websession,
