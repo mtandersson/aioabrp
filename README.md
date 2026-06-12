@@ -31,9 +31,8 @@ import aiohttp
 from aioabrp import (
     AbrpClient,
     ConnectionEvent,
-    Metric,
-    MetricValue,
     StaticAuth,
+    Telemetry,
     TelemetryStream,
 )
 
@@ -41,8 +40,8 @@ API_KEY = "your-iternio-partner-api-key"
 ACCESS_TOKEN = "your-abrp-access-token"
 
 
-def on_update(vehicle_id: int, metrics: dict[Metric, MetricValue]) -> None:
-    for metric, mv in metrics.items():
+def on_update(vehicle_id: int, telemetry: Telemetry) -> None:
+    for metric, mv in telemetry.items():
         print(f"vehicle {vehicle_id}: {metric} = {mv.value!r} (time={mv.time})")
 
 

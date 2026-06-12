@@ -2,7 +2,9 @@
 
 Converts one telemetry wire frame (a one-shot ``GET /2/tlm/{id}`` payload
 or an SSE frame body — see :mod:`aioabrp._wire_types`) into the library's
-typed event shape ``dict[Metric, MetricValue]``.
+typed event shape ``dict[Metric, MetricValue]`` (internal; the public
+``on_update`` / ``async_get_current_telemetry`` boundary packs this into a
+:class:`~aioabrp.models.Telemetry`).
 
 Tolerance matrix shared by every metric: the extractors tolerate every
 shape the server might emit for an unavailable metric — missing key,

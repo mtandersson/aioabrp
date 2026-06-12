@@ -5,8 +5,8 @@ to the v2 server-sent-events telemetry endpoint, converts each wire
 frame into the library's typed event shape, and delivers it to the
 consumer through two synchronous callbacks:
 
-* ``on_update(vehicle_id, metrics)`` — one call per frame that survives
-  extraction and the monotonicity gate;
+* ``on_update(vehicle_id, telemetry: Telemetry)`` — one call per frame
+  that survives extraction and the monotonicity gate;
 * ``on_connection_change(event)`` — connection lifecycle transitions.
 
 Contracts (consumer-facing):
