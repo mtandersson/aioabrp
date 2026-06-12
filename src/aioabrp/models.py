@@ -1,8 +1,10 @@
 """Public typed models for aioabrp."""
 
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum, StrEnum
+from typing import Any
 
 
 class Metric(StrEnum):
@@ -41,17 +43,62 @@ class Location:
 
 
 @dataclass(frozen=True, slots=True)
-class MetricValue:
+class MetricValue[T]:
     """One extracted metric value.
 
-    Units are fixed per metric: percent (soc/soh), W, V, Wh, m, °C,
-    Wh/km. ``time`` is the wire block's tz-aware timestamp or
-    ``None``; ``provider`` is the clean upstream provider string or ``None``.
+    Generic over the value type ``T`` (``float`` for numeric metrics,
+    ``ChargingState`` for the categorical metric, ``Location`` for the GPS
+    pair). Units are fixed per metric: percent (soc/soh), W, V, Wh, m, °C,
+    Wh/km. ``time`` is the wire block's tz-aware timestamp or ``None``;
+    ``provider`` is the clean upstream provider string or ``None``.
     """
 
-    value: float | ChargingState | Location
+    value: T
     time: datetime | None
     provider: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Telemetry:
+    """A typed telemetry frame: one optional ``MetricValue`` per metric.
+
+    Mirrors the wire's ``OutputPoint`` (a struct of named optional blocks).
+    A field is ``None`` when the metric was absent from the frame; a stream
+    frame is a sparse delta, so most fields are ``None`` on any given update.
+    """
+
+    soc: MetricValue[float] | None = None
+    power: MetricValue[float] | None = None
+    voltage: MetricValue[float] | None = None
+    soe: MetricValue[float] | None = None
+    odometer: MetricValue[float] | None = None
+    calibrated_ref_cons: MetricValue[float] | None = None
+    battery_capacity: MetricValue[float] | None = None
+    soh: MetricValue[float] | None = None
+    range: MetricValue[float] | None = None
+    battery_temperature: MetricValue[float] | None = None
+    charging_state: MetricValue[ChargingState] | None = None
+    location: MetricValue[Location] | None = None
+
+    def items(self) -> Iterator[tuple[Metric, MetricValue[Any]]]:
+        """Yield ``(Metric, MetricValue)`` for every present (non-None) field.
+
+        The bridge is ``metric.value`` — every ``Metric`` member's value is
+        exactly the field name on this dataclass.
+        """
+        for metric in Metric:
+            value = getattr(self, metric.value)
+            if value is not None:
+                yield metric, value
+
+    def merge(self, delta: Telemetry) -> Telemetry:
+        """Return a copy of ``self`` with ``delta``'s present fields overlaid.
+
+        Absent (``None``) delta fields leave ``self``'s field untouched.
+        Pure structural overlay — accumulation policy is the consumer's.
+        """
+        updates = {metric.value: value for metric, value in delta.items()}
+        return replace(self, **updates) if updates else self
 
 
 class ConnectionState(Enum):
