@@ -45,6 +45,8 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
+from . import _clock
+from ._clock import clamp_future_times
 from ._extract import extract_metrics
 from ._sse import iter_sse_events, parse_sse_event
 from .auth import AbstractAuth
@@ -452,6 +454,10 @@ class TelemetryStream:
             unknown_charging_states_seen=self._unknown_charging_states_seen,
             log_name=self._name,
         )
+        # One clock read per frame; future block times are rewritten to now
+        # BEFORE the gate so a bad stamp can neither be delivered nor become
+        # an unreachable high-water mark (see _clock.clamp_future_times).
+        extracted = clamp_future_times(extracted, _clock._now())
         metrics = self._gate_metrics(vehicle_id, extracted)
         # PII contract: key names and counts only — never the frame body.
         _LOGGER.debug(

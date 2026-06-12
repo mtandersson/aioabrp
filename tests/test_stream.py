@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from conftest import CallbackRecorder, SseScript, SseServerHarness, build_frame
 
+import aioabrp._clock as _clock
 from aioabrp.auth import AbstractAuth
 from aioabrp.exceptions import AbrpAuthError
 from aioabrp.models import ConnectionState, MetricValue, Telemetry
@@ -22,6 +23,8 @@ T1 = "2026-06-11T10:00:00+00:00"
 T2 = "2026-06-11T11:00:00+00:00"
 T1_DT = datetime(2026, 6, 11, 10, 0, 0, tzinfo=UTC)
 T2_DT = datetime(2026, 6, 11, 11, 0, 0, tzinfo=UTC)
+NOW_DT = datetime(2026, 6, 11, 12, 0, 0, tzinfo=UTC)
+FUTURE = "2026-06-11T18:00:00+00:00"
 
 StreamFactory = Callable[..., TelemetryStream]
 
@@ -320,3 +323,55 @@ async def test_on_update_delivers_telemetry_with_correct_fields(
     assert tlm.power.value == 3000.0
     # Absent metric (not in the frame) must be None.
     assert tlm.voltage is None
+
+
+async def test_future_time_is_clamped_to_now_on_delivery(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
+    sse_server.scripts = [
+        SseScript([("frame", build_frame(1, soc=0.5, time=FUTURE)), ("sleep", 30)])
+    ]
+    stream = stream_factory()
+    await stream.start()
+    await recorder.wait_for_updates(1)
+
+    _vid, tlm = recorder.updates[0]
+    # Consumer never sees the future stamp: it is rewritten to now.
+    assert tlm.soc == MetricValue(value=50.0, time=NOW_DT, provider=None)
+
+
+async def test_future_time_does_not_poison_the_gate(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+    monkeypatch,
+) -> None:
+    # Without the clamp, the 18:00 stamp becomes the high-water mark and a
+    # later current-time frame (< 18:00) would be dropped. With the clamp it is
+    # stored as `now` (12:00), so the 12:00 frame is adopted (equal-time).
+    monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
+    sse_server.scripts = [
+        SseScript(
+            [
+                (
+                    "frame",
+                    build_frame(1, soc=0.5, time=FUTURE),
+                ),  # 18:00 -> clamped to NOW
+                (
+                    "frame",
+                    build_frame(1, soc=0.6, time="2026-06-11T12:00:00+00:00"),
+                ),  # at NOW: adopted
+                ("sleep", 30),
+            ]
+        )
+    ]
+    stream = stream_factory()
+    await stream.start()
+    await recorder.wait_for_updates(2)
+
+    values = [m.soc.value for _, m in recorder.updates if m.soc]
+    assert values == [50.0, 60.0]
