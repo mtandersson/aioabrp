@@ -59,7 +59,7 @@ from .const import (
     SSE_SOCK_CONNECT_TIMEOUT_SECONDS,
 )
 from .exceptions import AbrpApiError, AbrpAuthError
-from .models import ConnectionEvent, ConnectionState, Metric, MetricValue
+from .models import ConnectionEvent, ConnectionState, Metric, MetricValue, Telemetry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ class TelemetryStream:
         api_key: str,
         auth: AbstractAuth,
         vehicle_ids: list[int],
-        on_update: Callable[[int, dict[Metric, MetricValue]], None],
+        on_update: Callable[[int, Telemetry], None],
         on_connection_change: Callable[[ConnectionEvent], None],
         *,
         name: str | None = None,
@@ -463,11 +463,14 @@ class TelemetryStream:
             len(metrics),
         )
         if metrics:
-            self._dispatch(lambda: self._on_update(vehicle_id, metrics), "on_update")
+            telemetry = Telemetry(
+                **{metric.value: value for metric, value in metrics.items()}
+            )
+            self._dispatch(lambda: self._on_update(vehicle_id, telemetry), "on_update")
 
     def _gate_metrics(
-        self, vehicle_id: int, extracted: dict[Metric, MetricValue]
-    ) -> dict[Metric, MetricValue]:
+        self, vehicle_id: int, extracted: dict[Metric, MetricValue[Any]]
+    ) -> dict[Metric, MetricValue[Any]]:
         """Apply the per-``(vehicle_id, Metric)`` monotonicity gate.
 
         Four rules, keyed on the wire block's tz-aware ``time``:
@@ -482,7 +485,7 @@ class TelemetryStream:
           DESIGN: reconnect snapshots re-deliver the current state with
           unchanged timestamps and consumers rely on that backfill.
         """
-        adopted: dict[Metric, MetricValue] = {}
+        adopted: dict[Metric, MetricValue[Any]] = {}
         for metric, value in extracted.items():
             key = (vehicle_id, metric)
             if value.time is None:

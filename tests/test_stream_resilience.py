@@ -33,7 +33,7 @@ from conftest import (
 )
 
 from aioabrp.auth import StaticAuth
-from aioabrp.models import ConnectionEvent, ConnectionState, Metric, MetricValue
+from aioabrp.models import ConnectionEvent, ConnectionState, MetricValue, Telemetry
 from aioabrp.stream import TelemetryStream
 
 T1 = "2026-06-11T10:00:00+00:00"
@@ -196,7 +196,8 @@ async def test_malformed_frame_disconnects_then_reconnects(
     await stream.start()
     await recorder.wait_for_updates(1)
 
-    assert recorder.updates[0][1][Metric.SOC].value == 60.0
+    assert recorder.updates[0][1].soc is not None
+    assert recorder.updates[0][1].soc.value == 60.0
     # The malformed frame arrived before any good frame, so attempt 1
     # never reached CONNECTED.
     assert recorder.states == [
@@ -233,10 +234,9 @@ async def test_chunk_boundary_utf8_and_crlf_end_to_end(
     await stream.start()
     await recorder.wait_for_updates(1)
 
-    assert recorder.updates[0] == (
-        1,
-        {Metric.SOC: MetricValue(value=50.0, time=None, provider=None)},
-    )
+    vid, tlm = recorder.updates[0]
+    assert vid == 1
+    assert tlm.soc == MetricValue(value=50.0, time=None, provider=None)
     assert recorder.states == [ConnectionState.CONNECTED]
 
 
@@ -254,7 +254,7 @@ async def test_flush_path_delivers_frame_without_trailing_blank_line(
     await stream.start()
     await recorder.wait_for_updates(2)
 
-    values = [metrics[Metric.SOC].value for _, metrics in recorder.updates]
+    values = [metrics.soc.value for _, metrics in recorder.updates if metrics.soc]
     assert values == [50.0, 60.0]
     assert recorder.states == [
         ConnectionState.CONNECTED,
@@ -276,7 +276,7 @@ async def test_on_update_raising_keeps_stream_alive(
 ) -> None:
     """A raising on_update is logged and the next frame still arrives."""
 
-    def exploding_update(vehicle_id: int, metrics: dict[Metric, MetricValue]) -> None:
+    def exploding_update(vehicle_id: int, metrics: Telemetry) -> None:
         recorder.on_update(vehicle_id, metrics)
         raise RuntimeError("consumer bug in on_update")
 
@@ -293,7 +293,7 @@ async def test_on_update_raising_keeps_stream_alive(
     await stream.start()
     await recorder.wait_for_updates(2)
 
-    values = [metrics[Metric.SOC].value for _, metrics in recorder.updates]
+    values = [metrics.soc.value for _, metrics in recorder.updates if metrics.soc]
     assert values == [50.0, 60.0]
     # Still healthy: no disconnect caused by the raising callback.
     assert recorder.states == [ConnectionState.CONNECTED]
@@ -546,7 +546,7 @@ async def test_aclose_raising_client_error_keeps_loop_alive(
     await stream.start()
     await recorder.wait_for_updates(2)
 
-    values = [metrics[Metric.SOC].value for _, metrics in recorder.updates[:2]]
+    values = [metrics.soc.value for _, metrics in recorder.updates[:2] if metrics.soc]
     assert values == [50.0, 60.0]
     assert recorder.states[:3] == [
         ConnectionState.CONNECTED,
@@ -612,12 +612,10 @@ async def test_reconnect_backfill_with_identical_times_re_emits(
     await stream.start()
     await recorder.wait_for_updates(2)
 
-    expected = (
-        1,
-        {Metric.SOC: MetricValue(value=50.0, time=T1_DT, provider=None)},
-    )
-    assert recorder.updates[0] == expected
-    assert recorder.updates[1] == expected
+    expected_soc = MetricValue(value=50.0, time=T1_DT, provider=None)
+    for vid, tlm in recorder.updates[:2]:
+        assert vid == 1
+        assert tlm.soc == expected_soc
 
 
 class _SpyingSession:
@@ -726,7 +724,8 @@ async def test_no_pii_in_logs_across_full_cycle(
     await asyncio.wait_for(stream.stop(), timeout=1.0)
 
     # The planted values genuinely flowed through the stream...
-    delivered = recorder.updates[0][1][Metric.SOC]
+    delivered = recorder.updates[0][1].soc
+    assert delivered is not None
     assert delivered.value == 42.42
     assert delivered.provider == provider
     # ...the DEBUG capture is live (per-frame logs were recorded, so the

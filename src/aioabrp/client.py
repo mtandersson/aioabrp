@@ -47,7 +47,7 @@ from .const import (
     ONE_SHOT_TIMEOUT_SECONDS,
 )
 from .exceptions import AbrpApiError, AbrpAuthError
-from .models import AbrpVehicle, CatalogEntry, Metric, MetricValue
+from .models import AbrpVehicle, CatalogEntry, Telemetry
 
 # Heuristic match against the v1 envelope ``error`` text. The keywords are
 # word-bounded to avoid matching unrelated business errors that happen to
@@ -182,18 +182,17 @@ class AbrpClient:
                 catalog[entry.typecode] = entry
         return catalog
 
-    async def async_get_current_telemetry(
-        self, vehicle_id: int
-    ) -> dict[Metric, MetricValue]:
+    async def async_get_current_telemetry(self, vehicle_id: int) -> Telemetry:
         """Fetch and extract the current telemetry snapshot for one vehicle.
 
         ``GET /2/tlm/{vehicle_id}`` with ``Accept: application/json``
         returns the bare wire frame (the single-vehicle endpoint scopes
         ``vehicleId`` via the path). An empty response body ``{}`` is a
-        valid "no metric data yet" answer and extracts to ``{}``.
+        valid "no metric data yet" answer and extracts to a ``Telemetry``
+        with all fields ``None``.
 
         The frame runs through :func:`aioabrp._extract.extract_metrics`,
-        so the result is the same typed ``dict[Metric, MetricValue]``
+        so the result is the same typed :class:`~aioabrp.models.Telemetry`
         shape a telemetry stream's ``on_update`` delivers. No
         monotonicity gating happens here — any seeding/merge policy
         against stream events belongs to the consumer.
@@ -208,10 +207,11 @@ class AbrpClient:
         payload = await self._get_v2_json(
             f"{API_BASE_V2}/{ENDPOINT_TLM}/{vehicle_id}", what="one-shot"
         )
-        return extract_metrics(
+        extracted = extract_metrics(
             payload,
             unknown_charging_states_seen=self._unknown_charging_states_seen,
         )
+        return Telemetry(**{metric.value: value for metric, value in extracted.items()})
 
     async def _get_v2_json(self, url: str, *, what: str) -> dict[str, Any]:
         """GET a v2 endpoint and return its bare-JSON dict payload.

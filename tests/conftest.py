@@ -29,7 +29,7 @@ from aiohttp.test_utils import TestServer
 
 from aioabrp.auth import AbstractAuth, StaticAuth
 from aioabrp.const import HEADER_ABRP_SESSION
-from aioabrp.models import ConnectionEvent, ConnectionState, Metric, MetricValue
+from aioabrp.models import ConnectionEvent, ConnectionState, Telemetry
 from aioabrp.stream import TelemetryStream
 
 # Upper bound for every wait helper below. Generous next to the tiny
@@ -205,11 +205,11 @@ class CallbackRecorder:
     """
 
     def __init__(self) -> None:
-        self.updates: list[tuple[int, dict[Metric, MetricValue]]] = []
+        self.updates: list[tuple[int, Telemetry]] = []
         self.events: list[ConnectionEvent] = []
         self._changed = asyncio.Event()
 
-    def on_update(self, vehicle_id: int, metrics: dict[Metric, MetricValue]) -> None:
+    def on_update(self, vehicle_id: int, metrics: Telemetry) -> None:
         self.updates.append((vehicle_id, metrics))
         self._changed.set()
 
@@ -286,7 +286,7 @@ async def stream_factory(
         name: str | None = None,
         backoff: Sequence[float] = (0.05, 0.1),
         watchdog_seconds: float = 5.0,
-        on_update: Callable[[int, dict[Metric, MetricValue]], None] | None = None,
+        on_update: Callable[[int, Telemetry], None] | None = None,
         on_connection_change: Callable[[ConnectionEvent], None] | None = None,
     ) -> TelemetryStream:
         stream = TelemetryStream(

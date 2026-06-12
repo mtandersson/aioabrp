@@ -21,7 +21,7 @@ from conftest import (
 )
 
 from aioabrp.auth import StaticAuth
-from aioabrp.models import ConnectionState, Metric, MetricValue
+from aioabrp.models import ConnectionState, Telemetry
 from aioabrp.stream import TelemetryStream
 
 TOKEN_A = "tok-account-a"
@@ -33,7 +33,7 @@ def _make_pair(
     recorder_a: CallbackRecorder,
     recorder_b: CallbackRecorder,
     *,
-    on_update_a: Callable[[int, dict[Metric, MetricValue]], None] | None = None,
+    on_update_a: Callable[[int, Telemetry], None] | None = None,
 ) -> tuple[TelemetryStream, TelemetryStream]:
     """Build the A/B stream pair: own token, own vehicle, own recorder."""
     stream_a = stream_factory(
@@ -87,8 +87,8 @@ async def test_two_streams_route_events_to_correct_callbacks(
     # Disjoint vehicle sets: no cross-talk in either direction.
     assert {vid for vid, _ in recorder_a.updates} == {1}
     assert {vid for vid, _ in recorder_b.updates} == {2}
-    assert [m[Metric.SOC].value for _, m in recorder_a.updates] == [50.0, 60.0]
-    assert [m[Metric.SOC].value for _, m in recorder_b.updates] == [70.0, 80.0]
+    assert [m.soc.value for _, m in recorder_a.updates if m.soc] == [50.0, 60.0]
+    assert [m.soc.value for _, m in recorder_b.updates if m.soc] == [70.0, 80.0]
     assert recorder_a.states == [ConnectionState.CONNECTED]
     assert recorder_b.states == [ConnectionState.CONNECTED]
     # Each connection went out under its own session token.
@@ -160,7 +160,7 @@ async def test_stop_on_one_stream_leaves_other_streaming(
 
     assert len(recorder_a.updates) == 1
     assert recorder_a.states == [ConnectionState.CONNECTED]  # stop is silent
-    assert [m[Metric.SOC].value for _, m in recorder_b.updates] == [50.0, 60.0]
+    assert [m.soc.value for _, m in recorder_b.updates if m.soc] == [50.0, 60.0]
 
 
 async def test_unknown_charging_state_warning_dedup_is_per_instance(
@@ -213,7 +213,7 @@ async def test_slow_callback_on_one_stream_does_not_error_other(
 ) -> None:
     recorder_a, recorder_b = CallbackRecorder(), CallbackRecorder()
 
-    def slow_update(vehicle_id: int, metrics: dict[Metric, MetricValue]) -> None:
+    def slow_update(vehicle_id: int, metrics: Telemetry) -> None:
         recorder_a.on_update(vehicle_id, metrics)
         # Deliberately blocking: callbacks are sync on one loop, so this
         # delays B's delivery — but must never error it.
@@ -249,7 +249,7 @@ async def test_slow_callback_on_one_stream_does_not_error_other(
     # Eventual delivery for B despite A's blocking callback.
     await recorder_b.wait_for_updates(2)
 
-    assert [m[Metric.SOC].value for _, m in recorder_b.updates] == [70.0, 80.0]
+    assert [m.soc.value for _, m in recorder_b.updates if m.soc] == [70.0, 80.0]
     assert recorder_b.states == [ConnectionState.CONNECTED]
     # No containment logs and no errors anywhere: slow is not broken.
     assert "callback raised" not in caplog.text

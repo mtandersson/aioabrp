@@ -15,7 +15,7 @@ from conftest import CallbackRecorder, SseScript, SseServerHarness, build_frame
 
 from aioabrp.auth import AbstractAuth
 from aioabrp.exceptions import AbrpAuthError
-from aioabrp.models import ConnectionState, Metric, MetricValue
+from aioabrp.models import ConnectionState, MetricValue, Telemetry
 from aioabrp.stream import TelemetryStream
 
 T1 = "2026-06-11T10:00:00+00:00"
@@ -58,14 +58,14 @@ async def test_happy_path_delivers_typed_updates(
     await recorder.wait_for_updates(2)
 
     assert recorder.states == [ConnectionState.CONNECTED]
-    assert recorder.updates[0] == (
-        1,
-        {Metric.SOC: MetricValue(value=50.0, time=T1_DT, provider="RIVIAN_STREAM")},
-    )
-    assert recorder.updates[1] == (
-        1,
-        {Metric.POWER: MetricValue(value=1500.0, time=None, provider=None)},
-    )
+    vid0, tlm0 = recorder.updates[0]
+    assert vid0 == 1
+    assert tlm0.soc == MetricValue(value=50.0, time=T1_DT, provider="RIVIAN_STREAM")
+    assert tlm0.power is None
+    vid1, tlm1 = recorder.updates[1]
+    assert vid1 == 1
+    assert tlm1.power == MetricValue(value=1500.0, time=None, provider=None)
+    assert tlm1.soc is None
 
     request = sse_server.requests[0]
     assert request.headers["X-API-KEY"] == "partner-key"
@@ -206,9 +206,9 @@ async def test_monotonicity_gate_sequence(
     await asyncio.sleep(0.1)
     assert len(recorder.updates) == 4
 
-    values = [metrics[Metric.SOC].value for _, metrics in recorder.updates]
+    values = [metrics.soc.value for _, metrics in recorder.updates if metrics.soc]
     assert values == [50.0, 50.0, 70.0, 20.0]
-    times = [metrics[Metric.SOC].time for _, metrics in recorder.updates]
+    times = [metrics.soc.time for _, metrics in recorder.updates if metrics.soc]
     assert times == [T2_DT, T2_DT, None, T1_DT]
 
 
@@ -257,7 +257,7 @@ async def test_start_after_stop_restarts_and_keeps_monotonicity_gate(
     assert len(sse_server.requests) == 2
     assert recorder.states.count(ConnectionState.CONNECTED) == 2
     # The T1 frame produced no update: only the T2 adopts surfaced.
-    values = [metrics[Metric.SOC].value for _, metrics in recorder.updates]
+    values = [metrics.soc.value for _, metrics in recorder.updates if metrics.soc]
     assert values == [50.0, 60.0]
 
 
@@ -282,3 +282,41 @@ async def test_stop_before_start_and_double_stop(
     await asyncio.sleep(0.1)
     assert len(recorder.events) == seen_events
     assert len(recorder.updates) == seen_updates
+
+
+async def test_on_update_delivers_telemetry_with_correct_fields(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+) -> None:
+    """on_update delivers a Telemetry; present fields are set, absent ones None.
+
+    A single frame carrying soc and power for vehicle 1 must produce a
+    Telemetry with .soc and .power populated and every other field None
+    (e.g. .voltage). The arg type is verified at runtime to confirm the
+    boundary packing, not just the annotation.
+    """
+    sse_server.scripts = [
+        SseScript(
+            [
+                ("frame", build_frame(1, soc=0.75, power=3000.0)),
+                ("sleep", 30),
+            ]
+        )
+    ]
+    stream = stream_factory()
+    await stream.start()
+    await recorder.wait_for_updates(1)
+    await asyncio.wait_for(stream.stop(), timeout=1.0)
+
+    assert len(recorder.updates) == 1
+    vid, tlm = recorder.updates[0]
+    assert vid == 1
+    assert isinstance(tlm, Telemetry)
+    # Present metrics.
+    assert tlm.soc is not None
+    assert tlm.soc.value == 75.0
+    assert tlm.power is not None
+    assert tlm.power.value == 3000.0
+    # Absent metric (not in the frame) must be None.
+    assert tlm.voltage is None

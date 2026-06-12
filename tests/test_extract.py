@@ -15,7 +15,7 @@ from aioabrp._extract import (
 from aioabrp.models import ChargingState, Location, Metric, MetricValue
 
 
-def _extract(frame: dict[str, Any]) -> dict[Metric, MetricValue]:
+def _extract(frame: dict[str, Any]) -> dict[Metric, MetricValue[Any]]:
     """Run extract_metrics with a throwaway dedup set."""
     return extract_metrics(frame, unknown_charging_states_seen=set())
 

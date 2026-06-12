@@ -251,7 +251,7 @@ def extract_metrics(
     *,
     unknown_charging_states_seen: set[str],
     log_name: str | None = None,
-) -> dict[Metric, MetricValue]:
+) -> dict[Metric, MetricValue[Any]]:
     """Extract every present, well-formed metric from one wire frame.
 
     Iterates :data:`WIRE_KEYS`; a metric appears in the result only when
@@ -268,7 +268,7 @@ def extract_metrics(
     warning when given; the warning contains nothing from the frame but
     the state string itself.
     """
-    result: dict[Metric, MetricValue] = {}
+    result: dict[Metric, MetricValue[Any]] = {}
     for metric, wire_key in WIRE_KEYS.items():
         block = frame.get(wire_key)
         if not isinstance(block, dict):

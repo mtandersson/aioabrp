@@ -33,7 +33,7 @@ from aioabrp.const import (
     ENDPOINT_VEHICLE_LIST,
 )
 from aioabrp.exceptions import AbrpApiError, AbrpAuthError
-from aioabrp.models import AbrpVehicle, ChargingState, Location, Metric
+from aioabrp.models import AbrpVehicle, ChargingState, Location, Metric, Telemetry
 
 API_KEY = "mock-partner-key"
 ACCESS_TOKEN = "mock-access-token"
@@ -656,7 +656,7 @@ async def test_get_catalog_http_500_raises_api_error(
 async def test_get_current_telemetry_happy_path_typed(
     client: AbrpClient, mock_api: aioresponses
 ) -> None:
-    """The one-shot payload extracts into a typed dict[Metric, MetricValue]."""
+    """The one-shot payload extracts into a typed Telemetry."""
     payload = {
         "soc": {
             "frac": 0.5,
@@ -671,32 +671,43 @@ async def test_get_current_telemetry_happy_path_typed(
 
     result = await client.async_get_current_telemetry(VEHICLE_ID)
 
-    assert set(result) == {
+    assert isinstance(result, Telemetry)
+    # Present metrics are accessible via named fields.
+    assert result.soc is not None
+    assert result.soc.value == 50.0
+    assert result.soc.time == datetime(2026, 5, 25, 12, 0, tzinfo=UTC)
+    assert result.soc.time.tzinfo is not None
+    assert result.soc.provider == "RIVIAN_STREAM"
+    assert result.power is not None
+    assert result.power.value == 5000.0
+    assert result.power.time is None
+    assert result.power.provider is None
+    assert result.charging_state is not None
+    assert result.charging_state.value is ChargingState.CHARGING_DC
+    assert result.location is not None
+    assert result.location.value == Location(lat=57.7, lon=11.9)
+    # Metrics absent from the payload are None.
+    assert result.voltage is None
+    assert result.soe is None
+    # items() yields the four present metrics.
+    present_metrics = {metric for metric, _ in result.items()}
+    assert present_metrics == {
         Metric.SOC,
         Metric.POWER,
         Metric.CHARGING_STATE,
         Metric.LOCATION,
     }
-    soc = result[Metric.SOC]
-    assert soc.value == 50.0
-    assert soc.time == datetime(2026, 5, 25, 12, 0, tzinfo=UTC)
-    assert soc.time is not None
-    assert soc.time.tzinfo is not None
-    assert soc.provider == "RIVIAN_STREAM"
-    assert result[Metric.POWER].value == 5000.0
-    assert result[Metric.POWER].time is None
-    assert result[Metric.POWER].provider is None
-    assert result[Metric.CHARGING_STATE].value is ChargingState.CHARGING_DC
-    assert result[Metric.LOCATION].value == Location(lat=57.7, lon=11.9)
 
 
 async def test_get_current_telemetry_empty_payload(
     client: AbrpClient, mock_api: aioresponses
 ) -> None:
-    """``{}`` is a valid "no metric data yet" answer and extracts to ``{}``."""
+    """``{}`` body is valid "no data yet" and extracts to an empty Telemetry."""
     mock_api.get(ONE_SHOT_URL, payload={})
 
-    assert await client.async_get_current_telemetry(VEHICLE_ID) == {}
+    result = await client.async_get_current_telemetry(VEHICLE_ID)
+    assert isinstance(result, Telemetry)
+    assert result == Telemetry()
 
 
 async def test_get_current_telemetry_request_shape(
@@ -802,9 +813,9 @@ async def test_get_current_telemetry_unknown_charging_state_dedup(
     client_b = AbrpClient(session, API_KEY, StaticAuth(ACCESS_TOKEN))
 
     with caplog.at_level(logging.WARNING, logger="aioabrp._extract"):
-        assert await client_a.async_get_current_telemetry(VEHICLE_ID) == {}
-        assert await client_a.async_get_current_telemetry(VEHICLE_ID) == {}
-        assert await client_b.async_get_current_telemetry(VEHICLE_ID) == {}
+        assert await client_a.async_get_current_telemetry(VEHICLE_ID) == Telemetry()
+        assert await client_a.async_get_current_telemetry(VEHICLE_ID) == Telemetry()
+        assert await client_b.async_get_current_telemetry(VEHICLE_ID) == Telemetry()
 
     warnings = [
         record
