@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+import pytest
 from conftest import CallbackRecorder, SseScript, SseServerHarness, build_frame
 
 import aioabrp._clock as _clock
@@ -329,7 +330,7 @@ async def test_future_time_is_clamped_to_now_on_delivery(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,
     stream_factory: StreamFactory,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
     sse_server.scripts = [
@@ -348,7 +349,7 @@ async def test_future_time_does_not_poison_the_gate(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,
     stream_factory: StreamFactory,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Without the clamp, the 18:00 stamp becomes the high-water mark and a
     # later current-time frame (< 18:00) would be dropped. With the clamp it is
@@ -381,7 +382,7 @@ async def test_seed_warms_gate_drops_older_than_seed(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,
     stream_factory: StreamFactory,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
     sse_server.scripts = [
@@ -413,7 +414,7 @@ async def test_seed_future_time_is_validated_to_now(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,
     stream_factory: StreamFactory,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
     # A frame stamped exactly at NOW (12:00). If the seed's future 18:00 stamp
@@ -442,7 +443,7 @@ async def test_seed_is_per_vehicle_isolated(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,
     stream_factory: StreamFactory,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_clock, "_now", lambda: NOW_DT)
     sse_server.scripts = [
@@ -461,4 +462,5 @@ async def test_seed_is_per_vehicle_isolated(
 
     vid, tlm = recorder.updates[0]
     assert vid == 2
+    assert tlm.soc is not None
     assert tlm.soc.value == 30.0  # vehicle 1's seed did not gate vehicle 2

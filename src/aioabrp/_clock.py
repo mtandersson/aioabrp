@@ -11,15 +11,21 @@ per construction, and per one-shot call.
 
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, overload
 
 from .models import Metric, MetricValue
 
+
 # Single monkeypatch target for all clock-dependent behaviour. Returns a
 # tz-aware UTC datetime to match the extractor's tz-aware wire times.
-_now = lambda: datetime.now(UTC)  # noqa: E731
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
+@overload
+def _clamp_time(t: datetime, now: datetime) -> datetime: ...
+@overload
+def _clamp_time(t: None, now: datetime) -> None: ...
 def _clamp_time(t: datetime | None, now: datetime) -> datetime | None:
     """Return ``min(t, now)``; ``None`` passes through (no ordering claim)."""
     if t is None or t <= now:
