@@ -18,8 +18,8 @@ from aioabrp import (
     Metric,
     MetricValue,
     StaticAuth,
+    Telemetry,
 )
-from aioabrp.models import Telemetry
 
 
 def _mv[T](
@@ -79,6 +79,7 @@ def test_charging_state_members() -> None:
             end_year=None,
             battery_capacity_wh=None,
         ),
+        Telemetry(soc=MetricValue(value=1.0, time=None, provider=None)),
     ],
 )
 def test_models_are_frozen(instance: object) -> None:
@@ -95,6 +96,7 @@ async def test_static_auth_returns_token() -> None:
 def test_empty_telemetry_has_all_none_and_no_items() -> None:
     tlm = Telemetry()
     assert tlm.soc is None
+    assert tlm.location is None
     assert list(tlm.items()) == []
 
 
@@ -130,4 +132,4 @@ def test_merge_overlays_present_delta_fields_and_keeps_others() -> None:
 
 def test_merge_empty_delta_returns_equivalent() -> None:
     base = Telemetry(soc=_mv(80.0))
-    assert base.merge(Telemetry()).soc is base.soc
+    assert base.merge(Telemetry()) is base

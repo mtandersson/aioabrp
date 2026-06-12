@@ -12,6 +12,7 @@ EXPECTED_PUBLIC_API = {
     "CatalogEntry",
     "Metric",
     "MetricValue",
+    "Telemetry",
     "ChargingState",
     "Location",
     "ConnectionState",

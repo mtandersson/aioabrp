@@ -12,6 +12,7 @@ from .models import (
     Location,
     Metric,
     MetricValue,
+    Telemetry,
 )
 from .stream import TelemetryStream
 
@@ -32,6 +33,7 @@ __all__ = [
     "Metric",
     "MetricValue",
     "StaticAuth",
+    "Telemetry",
     "TelemetryStream",
     "__version__",
 ]
