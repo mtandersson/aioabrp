@@ -184,12 +184,21 @@ the published runtime dependency stays unpinned.
 ### Releases
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/);
-there is no CHANGELOG file — release notes are generated from the commit
-history by [git-cliff](https://git-cliff.org/) (`cliff.toml`) and published
-as GitHub Releases. Pushing a `v*` tag runs the quality gate, builds the
-sdist + wheel, verifies the tag matches `aioabrp.__version__`, publishes to
-PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
-(OIDC), and creates the GitHub Release.
+there is no CHANGELOG file and no version literal in the source — the version
+is derived from the git tag at build time ([hatch-vcs](https://github.com/ofek/hatch-vcs)),
+so feature PRs never carry a version bump.
+
+To cut a release, a maintainer runs the **Release** workflow manually
+(`workflow_dispatch`, from `main`). It runs the quality gate, then derives the
+next version from the Conventional Commits since the last tag with
+[git-cliff](https://git-cliff.org/) (`feat` → minor, `fix` → patch,
+breaking → major) — or uses the optional `version` input (`X.Y.Z`) to force a
+specific version; leave it blank to auto-derive. The workflow tags `vX.Y.Z`,
+builds the sdist + wheel (hatch-vcs reads the version from the tag), publishes
+to PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+(OIDC), then pushes the tag and creates the GitHub Release with git-cliff
+notes. The tag is pushed only after a successful publish, so a failed run
+leaves no dangling tag.
 
 ## License
 

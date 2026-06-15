@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -32,6 +32,7 @@ Issues = "https://github.com/mtandersson/aioabrp/issues"
 dev = [
     "aioresponses",
     "mypy",
+    "packaging",
     "pytest",
     "pytest-asyncio",
     "ruff",
@@ -45,8 +46,12 @@ dev = [
 # published runtime dependency stays unpinned.
 constraint-dependencies = ["aiohttp<3.14"]
 
+# The version is derived from the git tag at build time (hatch-vcs); there
+# is no version literal in the source tree. A clean release is produced by
+# tagging ``vX.Y.Z`` (the release workflow does this on manual dispatch);
+# untagged checkouts resolve to a PEP 440 dev version (e.g. 0.1.1.devN+g…).
 [tool.hatch.version]
-path = "src/aioabrp/__init__.py"
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aioabrp"]

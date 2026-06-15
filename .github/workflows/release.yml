@@ -1,9 +1,19 @@
 name: Release
 
+# Manual release from the current branch (intended to be run on `main`).
+# The version is derived from the Conventional Commits since the last tag
+# (git-cliff), or taken from the optional `version` input. The job tags
+# `vX.Y.Z`, builds (hatch-vcs reads the version from that tag), publishes to
+# PyPI, and creates the GitHub release. No version literal lives in source,
+# so feature PRs never carry a version bump.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit version, e.g. 0.2.0 (blank = derive from commits)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   release:
@@ -11,13 +21,15 @@ jobs:
     permissions:
       # Required for PyPI Trusted Publishing (OIDC).
       id-token: write
-      # Required to create the GitHub release.
+      # Required to push the tag and create the GitHub release.
       contents: write
     steps:
       - uses: actions/checkout@v5
         with:
-          persist-credentials: false
-          # Full history + tags so git-cliff can compute release notes.
+          # Keep the token so we can push the new tag; contents:write authorizes it.
+          persist-credentials: true
+          # Full history + tags so git-cliff can compute the bump and notes,
+          # and hatch-vcs can resolve the version from the tag.
           fetch-depth: 0
 
       - name: Install uv
@@ -40,24 +52,89 @@ jobs:
       - name: Test
         run: uv run pytest
 
-      - name: Build sdist and wheel
-        run: uv build
+      - name: Determine version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            raw="${INPUT_VERSION}"
+          else
+            raw="$(uv tool run git-cliff@2.13.1 --bumped-version)"
+          fi
+          # Strip an optional leading "v" and any surrounding whitespace.
+          version="$(printf '%s' "${raw#v}" | tr -d '[:space:]')"
+          # Constrain to a plain X.Y.Z release: keeps the value safe to drop
+          # into a git ref + artifact filename, and matches hatch-vcs's
+          # un-normalized output so the artifact-name check below stays exact.
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing version '${version}' (expected X.Y.Z)." >&2
+            exit 1
+          fi
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::Tag ${tag} already exists — nothing new to release (no bump since the last tag), or pass an explicit higher version." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "Releasing ${tag}"
 
-      # `uv version --short` cannot read hatchling dynamic versions, so ask
-      # the package itself (src/aioabrp/__init__.py is the single source).
-      - name: Check tag matches project version
-        run: test "v$(uv run python -c 'import aioabrp; print(aioabrp.__version__)')" = "${GITHUB_REF_NAME}"
+      - name: Create tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Local tag only for now — hatch-vcs reads it at build time. Pushed
+          # after a successful PyPI publish so a failed build leaves no tag.
+          git tag -a "${TAG}" -m "${TAG}"
+
+      - name: Build sdist and wheel
+        run: |
+          set -euo pipefail
+          # hatch-vcs derives the version from the freshly created tag on HEAD;
+          # a dirty tree would yield a .devN/+dirty version and a filename
+          # mismatch below. Fail loudly and early if anything is uncommitted.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Working tree is dirty; refusing to build (hatch-vcs would produce a dev version)." >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+          uv build
+
+      - name: Verify built artifacts match the tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          test -f "dist/aioabrp-${VERSION}.tar.gz"
+          test -f "dist/aioabrp-${VERSION}-py3-none-any.whl"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent re-runs: if a prior run published this version to PyPI
+          # but failed before tagging/release, don't hard-fail on the immutable
+          # duplicate — let the run proceed to push the tag and create the release.
+          skip-existing: true
+
+      - name: Push tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: git push origin "${TAG}"
 
       - name: Generate release notes from conventional commits
-        run: uv tool run git-cliff --latest --strip all -o "${RUNNER_TEMP}/RELEASE_NOTES.md"
+        run: uv tool run git-cliff@2.13.1 --latest --strip all -o "${RUNNER_TEMP}/RELEASE_NOTES.md"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: >-
-          gh release create "${GITHUB_REF_NAME}" dist/*
-          --title "${GITHUB_REF_NAME}"
+          gh release create "${TAG}" dist/*
+          --title "${TAG}"
           --notes-file "${RUNNER_TEMP}/RELEASE_NOTES.md"
