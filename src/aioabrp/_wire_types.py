@@ -13,15 +13,20 @@ library consumes (``OutputPoint`` for one-shot telemetry payloads,
 
 * every metric extractor registered in :mod:`aioabrp._extract` — soc,
   power, voltage, soe, odometer, calibratedRefCons, batteryCapacity,
-  soh, estimatedBatteryRange, batteryTemperature, chargingState;
+  soh, estimatedBatteryRange, batteryTemperature, chargingState,
+  cabinSetPoint, cabinTemperature, calibratedMaxSpeed,
+  chargingEnergyAdded, current, drivingState, elevation,
+  externalTemperature, heading, hvacPower, speed, speedFactor,
+  calibratedConfidence, mapInfo;
 * ``location`` — carried on the SSE wire and consumed by the
   :attr:`aioabrp.Metric.LOCATION` extractor in :mod:`aioabrp._extract`.
 
-That's 12 surfaced keys → 12 leaf+Output pairs + the mixin chain
+That's 26 surfaced keys → 26 leaf+Output pairs + the mixin chain
 (``WithTime``, ``WithTimeAndProvider``, ``Provider``, ``DateTimeString``)
-+ a handful of numeric type aliases (plus the ``ChargingStateValue``
-enum alias for the one categorical leaf). The full swagger graph emits
-~415 classes; the keep-set above is ~36 — 91 % reduction.
++ a handful of numeric type aliases (plus the ``ChargingStateValue`` /
+``DrivingStateValue`` / ``Region`` enum aliases for the categorical
+leaves). The full swagger graph emits ~415 classes; the keep-set is a
+fraction of that. ``OutputPoint`` mirrors ABRP's telemetry payload 1:1.
 
 The exhaustive keep-set is also pinned by ``tests/test_wire_types.py``:
 an ``OutputPoint`` cardinality assertion fails RED if a future regen
@@ -115,6 +120,8 @@ type FracWiggle = float
 type EnergyWh = float
 type PowerW = float
 type TemperatureC = float
+type Degrees = float
+type FracItem = float
 
 
 class Coordinates(TypedDict):
@@ -227,18 +234,168 @@ class VoltageOutput(WithTimeAndProvider, Voltage):
     pass
 
 
+class CabinSetPoint(TypedDict):
+    c: TemperatureC
+
+
+class CabinSetPointOutput(WithTimeAndProvider, CabinSetPoint):
+    pass
+
+
+class CabinTemperature(TypedDict):
+    c: TemperatureC
+
+
+class CabinTemperatureOutput(WithTimeAndProvider, CabinTemperature):
+    pass
+
+
+class ExternalTemperature(TypedDict):
+    c: TemperatureC
+
+
+class ExternalTemperatureOutput(WithTimeAndProvider, ExternalTemperature):
+    pass
+
+
+class ChargingEnergyAdded(TypedDict):
+    wh: EnergyWh
+
+
+class ChargingEnergyAddedOutput(WithTimeAndProvider, ChargingEnergyAdded):
+    pass
+
+
+class Current(TypedDict):
+    a: float
+
+
+class CurrentOutput(WithTimeAndProvider, Current):
+    pass
+
+
+class Elevation(TypedDict):
+    m: float
+
+
+class ElevationOutput(WithTimeAndProvider, Elevation):
+    pass
+
+
+class Heading(TypedDict):
+    degrees: Degrees
+
+
+class HeadingOutput(WithTimeAndProvider, Heading):
+    pass
+
+
+class HvacPower(TypedDict):
+    w: PowerW
+
+
+class HvacPowerOutput(WithTimeAndProvider, HvacPower):
+    pass
+
+
+class Speed(TypedDict):
+    ms: float
+
+
+class SpeedOutput(WithTimeAndProvider, Speed):
+    pass
+
+
+class MaxSpeed(TypedDict):
+    ms: float
+
+
+class MaxSpeedOutput(WithTimeAndProvider, MaxSpeed):
+    pass
+
+
+class SpeedFactor(TypedDict):
+    frac: float
+
+
+class SpeedFactorOutput(WithTimeAndProvider, SpeedFactor):
+    pass
+
+
+class CalibratedConfidence(TypedDict):
+    frac: list[FracItem]
+
+
+class CalibratedConfidenceOutput(WithTimeAndProvider, CalibratedConfidence):
+    pass
+
+
+type DrivingStateValue = Literal[
+    "PARK",
+    "REVERSE",
+    "NEUTRAL",
+    "DRIVE",
+]
+
+
+class DrivingState(TypedDict):
+    state: DrivingStateValue
+
+
+class DrivingStateOutput(WithTimeAndProvider, DrivingState):
+    pass
+
+
+type Region = Literal[
+    "AFRICA",
+    "ASIA",
+    "AUSTRALIA",
+    "CENTRAL_AMERICA",
+    "EUROPE",
+    "NORTH_AMERICA",
+    "SOUTH_AMERICA",
+    "OCEANIA",
+]
+
+
+class MapInfo(TypedDict):
+    region: NotRequired[Region]
+    country_3: NotRequired[str]
+    address: NotRequired[str]
+    speedLimitMs: NotRequired[float]
+    isFreeSpeedZone: NotRequired[bool]
+
+
+class MapInfoOutput(WithTimeAndProvider, MapInfo):
+    pass
+
+
 class OutputPoint(TypedDict):
     batteryCapacity: NotRequired[BatteryCapacityOutput]
     batteryTemperature: NotRequired[BatteryTemperatureOutput]
+    cabinSetPoint: NotRequired[CabinSetPointOutput]
+    cabinTemperature: NotRequired[CabinTemperatureOutput]
+    calibratedConfidence: NotRequired[CalibratedConfidenceOutput]
+    calibratedMaxSpeed: NotRequired[MaxSpeedOutput]
     calibratedRefCons: NotRequired[CalibratedRefConsOutput]
+    chargingEnergyAdded: NotRequired[ChargingEnergyAddedOutput]
     chargingState: NotRequired[ChargingStateOutput]
+    current: NotRequired[CurrentOutput]
+    drivingState: NotRequired[DrivingStateOutput]
+    elevation: NotRequired[ElevationOutput]
     estimatedBatteryRange: NotRequired[EstimatedBatteryRangeOutput]
+    externalTemperature: NotRequired[ExternalTemperatureOutput]
+    heading: NotRequired[HeadingOutput]
+    hvacPower: NotRequired[HvacPowerOutput]
     location: NotRequired[LocationOutput]
+    mapInfo: NotRequired[MapInfoOutput]
     odometer: NotRequired[OdometerOutput]
     power: NotRequired[PowerOutput]
     soc: NotRequired[SocOutput]
     soe: NotRequired[SoeOutput]
     soh: NotRequired[SohOutput]
+    speed: NotRequired[SpeedOutput]
+    speedFactor: NotRequired[SpeedFactorOutput]
     voltage: NotRequired[VoltageOutput]
 
 

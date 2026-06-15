@@ -161,6 +161,9 @@ def build_frame(
     range_m: float | None = None,
     battery_temp_c: float | None = None,
     charging_state: str | None = None,
+    driving_state: str | None = None,
+    calibrated_confidence: list[float] | None = None,
+    map_info: dict[str, Any] | None = None,
     time: str | None = None,
     provider: str | None = None,
 ) -> dict[str, Any]:
@@ -169,8 +172,9 @@ def build_frame(
     Mirrors the v2 SSE wire shape: ``vehicleId`` plus zero or more nested
     per-metric records (``soc.frac``, ``power.w``, ``voltage.v``,
     ``estimatedBatteryRange.m``, ``batteryTemperature.c``,
-    ``chargingState.state``). Values default to ``None`` (omitted from
-    the frame, the wire's way of saying "no update"), not ``0``. When
+    ``chargingState.state``, ``drivingState.state``). Values default to
+    ``None`` (omitted from the frame, the wire's way of saying "no
+    update"), not ``0``. When
     given, ``time`` (ISO string) and ``provider`` are stamped into every
     included metric block.
     """
@@ -187,6 +191,12 @@ def build_frame(
         frame["batteryTemperature"] = {"c": battery_temp_c}
     if charging_state is not None:
         frame["chargingState"] = {"state": charging_state}
+    if driving_state is not None:
+        frame["drivingState"] = {"state": driving_state}
+    if calibrated_confidence is not None:
+        frame["calibratedConfidence"] = {"frac": calibrated_confidence}
+    if map_info is not None:
+        frame["mapInfo"] = dict(map_info)
     for key, block in frame.items():
         if key == "vehicleId":
             continue

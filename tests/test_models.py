@@ -14,9 +14,12 @@ from aioabrp import (
     ChargingState,
     ConnectionEvent,
     ConnectionState,
+    DrivingState,
     Location,
+    MapInfo,
     Metric,
     MetricValue,
+    Region,
     StaticAuth,
     Telemetry,
 )
@@ -50,7 +53,27 @@ def test_metric_values_match_registry_keys() -> None:
         "battery_temperature",
         "charging_state",
         "location",
+        "cabin_set_point",
+        "cabin_temperature",
+        "calibrated_max_speed",
+        "charging_energy_added",
+        "current",
+        "driving_state",
+        "elevation",
+        "external_temperature",
+        "heading",
+        "hvac_power",
+        "map_info",
+        "speed",
+        "speed_factor",
+        "calibrated_confidence",
     }
+
+
+def test_every_metric_has_a_telemetry_field() -> None:
+    """The Telemetry.items() bridge: every Metric value names a field."""
+    field_names = {f.name for f in dataclasses.fields(Telemetry)}
+    assert {m.value for m in Metric} <= field_names
 
 
 def test_charging_state_members() -> None:
@@ -61,6 +84,54 @@ def test_charging_state_members() -> None:
         "not_charging",
         "plugged_in",
     }
+
+
+def test_driving_state_members() -> None:
+    assert {d.value for d in DrivingState} == {
+        "park",
+        "reverse",
+        "neutral",
+        "drive",
+    }
+
+
+def test_region_members() -> None:
+    assert {r.value for r in Region} == {
+        "africa",
+        "asia",
+        "australia",
+        "central_america",
+        "europe",
+        "north_america",
+        "south_america",
+        "oceania",
+    }
+
+
+def test_map_info_carries_optional_subfields() -> None:
+    info = MapInfo(
+        region=Region.EUROPE,
+        country_3="SWE",
+        address="Kungsgatan",
+        speed_limit_ms=25.0,
+        is_free_speed_zone=False,
+    )
+    assert info.region is Region.EUROPE
+    assert info.country_3 == "SWE"
+    assert info.address == "Kungsgatan"
+    assert info.speed_limit_ms == 25.0
+    assert info.is_free_speed_zone is False
+    # Every subfield is independently optional.
+    assert (
+        MapInfo(
+            region=None,
+            country_3=None,
+            address=None,
+            speed_limit_ms=None,
+            is_free_speed_zone=None,
+        ).region
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -106,10 +177,20 @@ def test_items_yields_only_present_fields_keyed_by_metric() -> None:
 
 
 def test_typed_fields_carry_their_value_type() -> None:
+    info = MapInfo(
+        region=Region.EUROPE,
+        country_3="SWE",
+        address="Kungsgatan",
+        speed_limit_ms=25.0,
+        is_free_speed_zone=False,
+    )
     tlm = Telemetry(
         soc=_mv(80.0),
         charging_state=_mv(ChargingState.CHARGING_DC),
         location=_mv(Location(lat=1.0, lon=2.0)),
+        driving_state=_mv(DrivingState.DRIVE),
+        calibrated_confidence=_mv((0.8, 0.85, 0.9, 0.95)),
+        map_info=_mv(info),
     )
     assert tlm.soc is not None
     assert tlm.soc.value == 80.0
@@ -117,6 +198,12 @@ def test_typed_fields_carry_their_value_type() -> None:
     assert tlm.charging_state.value is ChargingState.CHARGING_DC
     assert tlm.location is not None
     assert tlm.location.value == Location(lat=1.0, lon=2.0)
+    assert tlm.driving_state is not None
+    assert tlm.driving_state.value is DrivingState.DRIVE
+    assert tlm.calibrated_confidence is not None
+    assert tlm.calibrated_confidence.value == (0.8, 0.85, 0.9, 0.95)
+    assert tlm.map_info is not None
+    assert tlm.map_info.value is info
 
 
 def test_merge_overlays_present_delta_fields_and_keeps_others() -> None:

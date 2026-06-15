@@ -96,6 +96,7 @@ class AbrpClient:
         self._api_key = api_key
         self._auth = auth
         self._unknown_charging_states_seen: set[str] = set()
+        self._unknown_driving_states_seen: set[str] = set()
 
     async def async_get_vehicles(self) -> list[AbrpVehicle]:
         """Return the authenticated user's garage.
@@ -219,6 +220,7 @@ class AbrpClient:
         extracted = extract_metrics(
             payload,
             unknown_charging_states_seen=self._unknown_charging_states_seen,
+            unknown_driving_states_seen=self._unknown_driving_states_seen,
         )
         # No gating here (stateless one-shot), but future block times are
         # clamped to now — same as the stream — so a future-dated snapshot

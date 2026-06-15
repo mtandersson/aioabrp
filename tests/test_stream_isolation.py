@@ -204,6 +204,52 @@ async def test_unknown_charging_state_warning_dedup_is_per_instance(
     # zero-after-the-first (shared global set) nor one per frame.
     assert len(warnings) == 2
     assert sorted(message[:3] for message in warnings) == ["A: ", "B: "]
+    assert all("chargingState" in message for message in warnings)
+
+
+async def test_unknown_driving_state_warning_dedup_is_per_instance(
+    sse_server: SseServerHarness,
+    stream_factory: StreamFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """driving-state drift dedups per stream instance, like charging-state."""
+    recorder_a, recorder_b = CallbackRecorder(), CallbackRecorder()
+    sse_server.scripts_by_session = {
+        TOKEN_A: [
+            SseScript(
+                [
+                    ("frame", build_frame(1, soc=0.5, driving_state="FLYING")),
+                    ("frame", build_frame(1, soc=0.6, driving_state="FLYING")),
+                    ("sleep", 30),
+                ]
+            )
+        ],
+        TOKEN_B: [
+            SseScript(
+                [
+                    ("frame", build_frame(2, soc=0.5, driving_state="FLYING")),
+                    ("frame", build_frame(2, soc=0.6, driving_state="FLYING")),
+                    ("sleep", 30),
+                ]
+            )
+        ],
+    }
+    stream_a, stream_b = _make_pair(stream_factory, recorder_a, recorder_b)
+    await stream_a.start()
+    await stream_b.start()
+    await recorder_a.wait_for_updates(2)
+    await recorder_b.wait_for_updates(2)
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "'FLYING'" in record.getMessage()
+    ]
+    # One warning per stream instance (per-instance dedup set), and the
+    # driving-state set is independent of the charging-state set.
+    assert len(warnings) == 2
+    assert sorted(message[:3] for message in warnings) == ["A: ", "B: "]
+    assert all("drivingState" in message for message in warnings)
 
 
 async def test_slow_callback_on_one_stream_does_not_error_other(

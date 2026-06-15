@@ -24,8 +24,17 @@ Per-metric load-bearing notes (ported with the extractors):
   (sub-zero pack temps) is a real wire shape, not a degenerate one.
   Distinct from any cabin or external temperature ABRP might surface in
   future fields.
-* odometer / range — native meters: a canonical, unit-flip-safe scale;
-  km rendering is display policy, not extraction policy.
+* odometer / range / elevation — native meters: a canonical,
+  unit-flip-safe scale; km rendering is display policy, not extraction
+  policy.
+* speed / calibrated_max_speed — native m/s; speed_factor is a raw
+  dimensionless multiplier (leaf ``frac`` but NOT surfaced x100); heading
+  is degrees; current is amps; charging_energy_added / hvac_power keep
+  Wh / W. None of these are derived or converted (1:1 wire mirror).
+* calibrated_confidence — a 1- or 4-element float array surfaced as a
+  tuple, all-or-nothing on any bad element. map_info — a struct with
+  independently-optional subfields (raw m/s speed limit); region drift
+  degrades that subfield to ``None`` without dropping the block.
 """
 
 import logging
@@ -34,7 +43,15 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from .models import ChargingState, Location, Metric, MetricValue
+from .models import (
+    ChargingState,
+    DrivingState,
+    Location,
+    MapInfo,
+    Metric,
+    MetricValue,
+    Region,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,6 +72,20 @@ WIRE_KEYS: dict[Metric, str] = {
     Metric.BATTERY_TEMPERATURE: "batteryTemperature",
     Metric.CHARGING_STATE: "chargingState",
     Metric.LOCATION: "location",
+    Metric.CABIN_SET_POINT: "cabinSetPoint",
+    Metric.CABIN_TEMPERATURE: "cabinTemperature",
+    Metric.CALIBRATED_MAX_SPEED: "calibratedMaxSpeed",
+    Metric.CHARGING_ENERGY_ADDED: "chargingEnergyAdded",
+    Metric.CURRENT: "current",
+    Metric.DRIVING_STATE: "drivingState",
+    Metric.ELEVATION: "elevation",
+    Metric.EXTERNAL_TEMPERATURE: "externalTemperature",
+    Metric.HEADING: "heading",
+    Metric.HVAC_POWER: "hvacPower",
+    Metric.MAP_INFO: "mapInfo",
+    Metric.SPEED: "speed",
+    Metric.SPEED_FACTOR: "speedFactor",
+    Metric.CALIBRATED_CONFIDENCE: "calibratedConfidence",
 }
 
 # Numeric leaf key under each metric's wire block (units in the module
@@ -70,10 +101,26 @@ _NUMERIC_LEAF_KEYS: dict[Metric, str] = {
     Metric.SOH: "frac",
     Metric.RANGE: "m",
     Metric.BATTERY_TEMPERATURE: "c",
+    Metric.CABIN_SET_POINT: "c",
+    Metric.CABIN_TEMPERATURE: "c",
+    Metric.EXTERNAL_TEMPERATURE: "c",
+    Metric.CALIBRATED_MAX_SPEED: "ms",
+    Metric.SPEED: "ms",
+    Metric.CHARGING_ENERGY_ADDED: "wh",
+    Metric.CURRENT: "a",
+    Metric.ELEVATION: "m",
+    Metric.HEADING: "degrees",
+    Metric.HVAC_POWER: "w",
+    # speed_factor is a dimensionless 0-2 multiplier; its wire leaf is
+    # ``frac`` but it is deliberately NOT in _FRACTION_METRICS — it must
+    # pass through unscaled, never surfaced x100.
+    Metric.SPEED_FACTOR: "frac",
 }
 
 # Metrics whose wire leaf is a 0.0-1.0 fraction surfaced x100 (soh
-# deliberately unclamped — see the module docstring).
+# deliberately unclamped — see the module docstring). speed_factor and
+# calibrated_confidence also carry a ``frac`` leaf but are intentionally
+# absent here: they are raw multipliers/confidences, not percentages.
 _FRACTION_METRICS = frozenset({Metric.SOC, Metric.SOH})
 
 # Wire enum member -> ChargingState for the categorical ``chargingState``
@@ -87,6 +134,32 @@ _CHARGING_STATES: dict[str, ChargingState] = {
     "CHARGING_UNKNOWN": ChargingState.CHARGING_UNKNOWN,
     "NOT_CHARGING": ChargingState.NOT_CHARGING,
     "PLUGGED_IN": ChargingState.PLUGGED_IN,
+}
+
+# Wire enum member -> DrivingState for the categorical ``drivingState``
+# field. Closed-enum, same contract as ``_CHARGING_STATES``: an
+# unrecognized/future member maps to None (metric omitted + one warning
+# per caller-owned dedup set — see :func:`_driving_state`).
+_DRIVING_STATES: dict[str, DrivingState] = {
+    "PARK": DrivingState.PARK,
+    "REVERSE": DrivingState.REVERSE,
+    "NEUTRAL": DrivingState.NEUTRAL,
+    "DRIVE": DrivingState.DRIVE,
+}
+
+# Wire enum member -> Region for the ``mapInfo.region`` subfield. Unlike
+# the top-level categorical metrics, an unrecognized region degrades to
+# ``None`` on the MapInfo struct (the rest of the block is preserved) and
+# does NOT warn — region is one optional subfield, not the whole metric.
+_REGIONS: dict[str, Region] = {
+    "AFRICA": Region.AFRICA,
+    "ASIA": Region.ASIA,
+    "AUSTRALIA": Region.AUSTRALIA,
+    "CENTRAL_AMERICA": Region.CENTRAL_AMERICA,
+    "EUROPE": Region.EUROPE,
+    "NORTH_AMERICA": Region.NORTH_AMERICA,
+    "SOUTH_AMERICA": Region.SOUTH_AMERICA,
+    "OCEANIA": Region.OCEANIA,
 }
 
 
@@ -179,18 +252,17 @@ def _clean_provider(block: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _float_leaf(block: Mapping[str, Any], leaf_key: str) -> float | None:
-    """Return the numeric leaf ``block[leaf_key]`` as a float, or ``None``.
+def _coerce_finite_number(value: object) -> float | None:
+    """Coerce a wire scalar to a finite ``float``, or ``None``.
 
-    Shared numeric tolerance matrix: missing leaf, ``null`` leaf,
-    non-numeric leaf, bool (a subclass of ``int`` in Python — the
-    explicit check matters), and non-finite values (``json.loads``
-    accepts the non-standard ``NaN``/``Infinity`` tokens; neither is a
-    usable metric value) all map to ``None``. Never raises. Accepted
-    leaves are coerced so :class:`MetricValue.value` is always a runtime
-    ``float`` regardless of wire int/float spelling.
+    The single numeric tolerance matrix shared by every numeric path
+    (leaf extraction and the ``calibratedConfidence`` array): non-numeric,
+    bool (a subclass of ``int`` in Python — the explicit check matters),
+    and non-finite values (``json.loads`` accepts the non-standard
+    ``NaN``/``Infinity`` tokens; neither is a usable metric value) all map
+    to ``None``. Never raises. Accepted values are coerced so the result
+    is always a runtime ``float`` regardless of wire int/float spelling.
     """
-    value = block.get(leaf_key)
     if (
         not isinstance(value, int | float)
         or isinstance(value, bool)
@@ -200,35 +272,59 @@ def _float_leaf(block: Mapping[str, Any], leaf_key: str) -> float | None:
     return float(value)
 
 
-def _charging_state(
-    block: Mapping[str, Any],
-    unknown_charging_states_seen: set[str],
-    log_name: str | None,
-) -> ChargingState | None:
-    """Map the categorical ``chargingState`` block to a :class:`ChargingState`.
+def _float_leaf(block: Mapping[str, Any], leaf_key: str) -> float | None:
+    """Return the numeric leaf ``block[leaf_key]`` as a float, or ``None``.
 
-    Tolerates every degenerate leaf shape (missing / null / non-string
-    ``state``) by returning ``None`` — consistent with the
-    absent/malformed -> omitted contract the numeric extractors share
-    (non-dict blocks are already rejected by :func:`extract_metrics`).
-    An unrecognized non-empty member also maps to ``None`` (the enum is
-    closed; a raw string must never leak into the typed event) and logs
-    a WARNING once per ``unknown_charging_states_seen`` set so upstream
-    enum drift leaves a runtime breadcrumb. The dedup set is
-    caller-owned — one per client/stream instance, never module-global —
-    so warning state cannot leak across accounts.
+    Thin wrapper over :func:`_coerce_finite_number` for the (missing leaf
+    -> ``None``) lookup case; the tolerance matrix lives in one place.
+    """
+    return _coerce_finite_number(block.get(leaf_key))
+
+
+_CATEGORICAL_OMITTED_WARNING = (
+    "%sUnrecognized ABRP %s %r; the %s metric will be omitted for this "
+    "value until aioabrp adds it"
+)
+
+
+def _enum_state[E](
+    block: Mapping[str, Any],
+    mapping: dict[str, E],
+    unknown_seen: set[str],
+    log_name: str | None,
+    *,
+    wire_field: str,
+    metric_name: str,
+) -> E | None:
+    """Map a closed categorical ``{state: <member>}`` block to a member enum.
+
+    Backs both ``chargingState`` and ``drivingState`` (one mapping +
+    dedup set each — the sets are caller-owned, one per client/stream
+    instance and never shared between the two enums, so drift in one
+    categorical metric can neither leak across accounts nor suppress the
+    other metric's warning). Tolerates every degenerate leaf shape
+    (missing / null / non-string ``state``) by returning ``None`` —
+    consistent with the absent/malformed -> omitted contract the numeric
+    extractors share (non-dict blocks are already rejected by
+    :func:`extract_metrics`). An unrecognized non-empty member also maps
+    to ``None`` (the enum is closed; a raw string must never leak into
+    the typed event) and logs a WARNING once per ``unknown_seen`` set so
+    upstream enum drift leaves a runtime breadcrumb. The warning carries
+    only the member token (and the optional ``log_name``), never any
+    other frame content.
     """
     state = block.get("state")
     if not isinstance(state, str):
         return None
-    member = _CHARGING_STATES.get(state)
-    if member is None and state and state not in unknown_charging_states_seen:
-        unknown_charging_states_seen.add(state)
+    member = mapping.get(state)
+    if member is None and state and state not in unknown_seen:
+        unknown_seen.add(state)
         _LOGGER.warning(
-            "%sUnrecognized ABRP chargingState %r; the charging_state metric "
-            "will be omitted for this state until aioabrp adds it",
+            _CATEGORICAL_OMITTED_WARNING,
             f"{log_name}: " if log_name else "",
+            wire_field,
             state,
+            metric_name,
         )
     return member
 
@@ -248,10 +344,86 @@ def _location(block: Mapping[str, Any]) -> Location | None:
     return Location(lat=lat, lon=long)
 
 
+def _calibrated_confidence(block: Mapping[str, Any]) -> tuple[float, ...] | None:
+    """Extract the ``calibratedConfidence`` array as a tuple of floats, or ``None``.
+
+    The wire leaf ``frac`` is a list of numbers (1 or 4 in practice).
+    All-or-nothing, consistent with :func:`_location`: a missing / null /
+    non-list / empty leaf, or ANY element that fails the shared numeric
+    tolerance matrix (:func:`_coerce_finite_number` — null, non-numeric,
+    bool, non-finite), omits the whole metric: a partially-decoded
+    confidence vector is meaningless. Surviving elements are coerced so
+    the tuple is always runtime ``float``s. The library does not interpret,
+    range-clamp, or length-check the values (consumer policy), matching
+    the no-derived-logic contract.
+    """
+    frac = block.get("frac")
+    if not isinstance(frac, list) or not frac:
+        return None
+    values: list[float] = []
+    for item in frac:
+        number = _coerce_finite_number(item)
+        if number is None:
+            return None
+        values.append(number)
+    return tuple(values)
+
+
+def _map_info(block: Mapping[str, Any]) -> MapInfo | None:
+    """Extract the ``mapInfo`` struct, or ``None`` when it carries no data.
+
+    Unlike every other metric, ``mapInfo`` has no single required leaf;
+    each subfield is independently optional and tolerated per-field:
+
+    * ``region`` — a closed enum; an unrecognized / non-string value
+      degrades to ``None`` while the rest of the struct survives (region
+      is one subfield, not the whole metric, so it is NOT dropped/warned
+      like the top-level categorical metrics);
+    * ``country_3`` / ``address`` — kept iff a string, else ``None``;
+    * ``speedLimitMs`` — the shared numeric tolerance matrix (raw m/s);
+    * ``isFreeSpeedZone`` — kept iff a genuine ``bool``, else ``None``.
+
+    When the block is a dict but EVERY subfield is absent / malformed the
+    metric is omitted (return ``None``) — same "presence = data present"
+    contract the other extractors hold, so a content-free ``mapInfo``
+    block never surfaces an all-``None`` struct.
+    """
+    raw_region = block.get("region")
+    region = _REGIONS.get(raw_region) if isinstance(raw_region, str) else None
+
+    raw_country = block.get("country_3")
+    country_3 = raw_country if isinstance(raw_country, str) else None
+
+    raw_address = block.get("address")
+    address = raw_address if isinstance(raw_address, str) else None
+
+    speed_limit_ms = _float_leaf(block, "speedLimitMs")
+
+    raw_zone = block.get("isFreeSpeedZone")
+    is_free_speed_zone = raw_zone if isinstance(raw_zone, bool) else None
+
+    if (
+        region is None
+        and country_3 is None
+        and address is None
+        and speed_limit_ms is None
+        and is_free_speed_zone is None
+    ):
+        return None
+    return MapInfo(
+        region=region,
+        country_3=country_3,
+        address=address,
+        speed_limit_ms=speed_limit_ms,
+        is_free_speed_zone=is_free_speed_zone,
+    )
+
+
 def extract_metrics(
     frame: Mapping[str, Any],
     *,
     unknown_charging_states_seen: set[str],
+    unknown_driving_states_seen: set[str],
     log_name: str | None = None,
 ) -> dict[Metric, MetricValue[Any]]:
     """Extract every present, well-formed metric from one wire frame.
@@ -263,12 +435,15 @@ def extract_metrics(
     :func:`parse_block_time`) and clean ``provider`` (or ``None`` — see
     :func:`is_clean_provider_str`).
 
-    ``unknown_charging_states_seen`` is the caller-owned dedup set for
-    the unrecognized-chargingState warning: one warning per state per
-    set. Keep one set per client/stream instance so multi-account
-    consumers do not share dedup state. ``log_name`` prefixes that
-    warning when given; the warning contains nothing from the frame but
-    the state string itself.
+    ``unknown_charging_states_seen`` / ``unknown_driving_states_seen`` are
+    the caller-owned dedup sets for the unrecognized-``chargingState`` /
+    ``drivingState`` warnings: one warning per state per set, and the two
+    enums use SEPARATE sets so drift in one never suppresses the other.
+    Keep one pair of sets per client/stream instance so multi-account
+    consumers do not share dedup state. ``log_name`` prefixes those
+    warnings when given; a warning contains nothing from the frame but
+    the unrecognized enum-member string itself (never the map address or
+    any other payload content).
     """
     result: dict[Metric, MetricValue[Any]] = {}
     for metric, wire_key in WIRE_KEYS.items():
@@ -276,11 +451,39 @@ def extract_metrics(
         if not isinstance(block, dict):
             # Missing key / null block / non-dict block: metric absent.
             continue
-        value: float | ChargingState | Location | None
+        value: (
+            float
+            | ChargingState
+            | DrivingState
+            | Location
+            | MapInfo
+            | tuple[float, ...]
+            | None
+        )
         if metric is Metric.CHARGING_STATE:
-            value = _charging_state(block, unknown_charging_states_seen, log_name)
+            value = _enum_state(
+                block,
+                _CHARGING_STATES,
+                unknown_charging_states_seen,
+                log_name,
+                wire_field="chargingState",
+                metric_name="charging_state",
+            )
+        elif metric is Metric.DRIVING_STATE:
+            value = _enum_state(
+                block,
+                _DRIVING_STATES,
+                unknown_driving_states_seen,
+                log_name,
+                wire_field="drivingState",
+                metric_name="driving_state",
+            )
         elif metric is Metric.LOCATION:
             value = _location(block)
+        elif metric is Metric.MAP_INFO:
+            value = _map_info(block)
+        elif metric is Metric.CALIBRATED_CONFIDENCE:
+            value = _calibrated_confidence(block)
         else:
             value = _float_leaf(block, _NUMERIC_LEAF_KEYS[metric])
             if value is not None and metric in _FRACTION_METRICS:

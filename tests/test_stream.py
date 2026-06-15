@@ -17,7 +17,15 @@ from conftest import CallbackRecorder, SseScript, SseServerHarness, build_frame
 import aioabrp._clock as _clock
 from aioabrp.auth import AbstractAuth
 from aioabrp.exceptions import AbrpAuthError
-from aioabrp.models import ConnectionState, Metric, MetricValue, Telemetry
+from aioabrp.models import (
+    ConnectionState,
+    DrivingState,
+    MapInfo,
+    Metric,
+    MetricValue,
+    Region,
+    Telemetry,
+)
 from aioabrp.stream import TelemetryStream
 
 T1 = "2026-06-11T10:00:00+00:00"
@@ -76,6 +84,62 @@ async def test_happy_path_delivers_typed_updates(
     assert request.headers["X-ABRP-SESSION"] == "stream-token"
     assert request.headers["Accept"] == "text/event-stream"
     assert request.query["vehicleIds"] == "1,2"
+
+    await asyncio.wait_for(stream.stop(), timeout=1.0)
+
+
+async def test_structured_metrics_survive_the_sse_round_trip(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+) -> None:
+    """The tuple + struct metrics decode end-to-end through real SSE bytes."""
+    sse_server.scripts = [
+        SseScript(
+            [
+                (
+                    "frame",
+                    build_frame(
+                        1,
+                        driving_state="DRIVE",
+                        calibrated_confidence=[0.8, 0.85, 0.9, 0.95],
+                        map_info={
+                            "region": "EUROPE",
+                            "country_3": "SWE",
+                            "address": "Kungsgatan",
+                            "speedLimitMs": 25.0,
+                            "isFreeSpeedZone": False,
+                        },
+                        time=T1,
+                        provider="RIVIAN_STREAM",
+                    ),
+                ),
+                ("sleep", 30),
+            ]
+        )
+    ]
+    stream = stream_factory(vehicle_ids=[1])
+    await stream.start()
+    await recorder.wait_for_updates(1)
+
+    _, tlm = recorder.updates[0]
+    assert tlm.driving_state == MetricValue(
+        value=DrivingState.DRIVE, time=T1_DT, provider="RIVIAN_STREAM"
+    )
+    assert tlm.calibrated_confidence == MetricValue(
+        value=(0.8, 0.85, 0.9, 0.95), time=T1_DT, provider="RIVIAN_STREAM"
+    )
+    assert tlm.map_info == MetricValue(
+        value=MapInfo(
+            region=Region.EUROPE,
+            country_3="SWE",
+            address="Kungsgatan",
+            speed_limit_ms=25.0,
+            is_free_speed_zone=False,
+        ),
+        time=T1_DT,
+        provider="RIVIAN_STREAM",
+    )
 
     await asyncio.wait_for(stream.stop(), timeout=1.0)
 

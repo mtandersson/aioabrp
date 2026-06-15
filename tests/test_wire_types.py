@@ -14,7 +14,7 @@ regen-then-prune header: if a future regen re-introduces a pruned field
 and the prune step is forgotten, this test goes loudly RED rather than
 the library silently shipping ~3k LOC of generated noise.
 
-Parametrize floor is one row per surfaced leaf (12 entries) —
+Parametrize floor is one row per surfaced leaf (26 entries) —
 representative-shape would blind the suite to per-leaf wire-key drift
 (e.g. codegen renaming ``frac`` to ``percent`` on ``Soh`` only).
 """
@@ -26,11 +26,23 @@ import pytest
 from aioabrp._wire_types import (
     BatteryCapacity,
     BatteryTemperature,
+    CabinSetPoint,
+    CabinTemperature,
+    CalibratedConfidence,
     CalibratedRefCons,
+    ChargingEnergyAdded,
     ChargingState,
+    Current,
+    DrivingState,
+    Elevation,
     EstimatedBatteryRange,
+    ExternalTemperature,
+    Heading,
+    HvacPower,
     Location,
     LocationOutput,
+    MapInfo,
+    MaxSpeed,
     Odometer,
     OutputPoint,
     OutputPointWithVehicleId,
@@ -38,6 +50,8 @@ from aioabrp._wire_types import (
     Soc,
     Soe,
     Soh,
+    Speed,
+    SpeedFactor,
     Voltage,
 )
 
@@ -58,9 +72,29 @@ _KEEP_SET_LEAVES: tuple[tuple[type, frozenset[str]], ...] = (
     (BatteryTemperature, frozenset({"c"})),
     (ChargingState, frozenset({"state"})),
     (Location, frozenset({"lat", "long"})),
+    # The 14 leaves added to reach the full 26-field OutputPoint mirror.
+    (CabinSetPoint, frozenset({"c"})),
+    (CabinTemperature, frozenset({"c"})),
+    (MaxSpeed, frozenset({"ms"})),
+    (ChargingEnergyAdded, frozenset({"wh"})),
+    (Current, frozenset({"a"})),
+    (DrivingState, frozenset({"state"})),
+    (Elevation, frozenset({"m"})),
+    (ExternalTemperature, frozenset({"c"})),
+    (Heading, frozenset({"degrees"})),
+    (HvacPower, frozenset({"w"})),
+    (Speed, frozenset({"ms"})),
+    (SpeedFactor, frozenset({"frac"})),
+    (CalibratedConfidence, frozenset({"frac"})),
+    (
+        MapInfo,
+        frozenset(
+            {"region", "country_3", "address", "speedLimitMs", "isFreeSpeedZone"}
+        ),
+    ),
 )
 
-# The 12 surfaced keys on ``OutputPoint`` after pruning. Anything other
+# The 26 surfaced keys on ``OutputPoint`` after pruning. Anything other
 # than this exact set is a drift signal: extra keys = generator
 # re-introduced a pruned field (regen-without-prune); missing keys =
 # accidental over-prune dropped a surfaced field.
@@ -78,6 +112,20 @@ _EXPECTED_OUTPUT_POINT_KEYS: frozenset[str] = frozenset(
         "batteryTemperature",
         "chargingState",
         "location",
+        "cabinSetPoint",
+        "cabinTemperature",
+        "calibratedMaxSpeed",
+        "chargingEnergyAdded",
+        "current",
+        "drivingState",
+        "elevation",
+        "externalTemperature",
+        "heading",
+        "hvacPower",
+        "mapInfo",
+        "speed",
+        "speedFactor",
+        "calibratedConfidence",
     }
 )
 
@@ -120,11 +168,11 @@ def test_output_leaf_carries_mixin_chain_keys() -> None:
 
 
 def test_output_point_cardinality_pins_surfaced_keys() -> None:
-    """``OutputPoint`` exposes EXACTLY the 12 surfaced wire keys.
+    """``OutputPoint`` exposes EXACTLY the 26 surfaced wire keys.
 
     Doubles as a swagger-drift canary per the regen-then-prune header in
     ``_wire_types.py``: if a future regen forgets the prune step,
-    cardinality jumps from 12 to ~27 and this assertion goes RED.
+    cardinality jumps from 26 to the full graph and this assertion goes RED.
     """
     assert set(get_type_hints(OutputPoint)) == set(_EXPECTED_OUTPUT_POINT_KEYS)
 
