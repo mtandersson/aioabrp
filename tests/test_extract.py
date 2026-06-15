@@ -12,12 +12,24 @@ from aioabrp._extract import (
     is_clean_provider_str,
     parse_block_time,
 )
-from aioabrp.models import ChargingState, Location, Metric, MetricValue
+from aioabrp.models import (
+    ChargingState,
+    DrivingState,
+    Location,
+    MapInfo,
+    Metric,
+    MetricValue,
+    Region,
+)
 
 
 def _extract(frame: dict[str, Any]) -> dict[Metric, MetricValue[Any]]:
-    """Run extract_metrics with a throwaway dedup set."""
-    return extract_metrics(frame, unknown_charging_states_seen=set())
+    """Run extract_metrics with throwaway dedup sets."""
+    return extract_metrics(
+        frame,
+        unknown_charging_states_seen=set(),
+        unknown_driving_states_seen=set(),
+    )
 
 
 def test_wire_keys_cover_every_metric() -> None:
@@ -27,6 +39,16 @@ def test_wire_keys_cover_every_metric() -> None:
     assert WIRE_KEYS[Metric.RANGE] == "estimatedBatteryRange"
     assert WIRE_KEYS[Metric.BATTERY_TEMPERATURE] == "batteryTemperature"
     assert WIRE_KEYS[Metric.CHARGING_STATE] == "chargingState"
+    # camelCase wire keys for the 14 added metrics.
+    assert WIRE_KEYS[Metric.CABIN_SET_POINT] == "cabinSetPoint"
+    assert WIRE_KEYS[Metric.CALIBRATED_MAX_SPEED] == "calibratedMaxSpeed"
+    assert WIRE_KEYS[Metric.CHARGING_ENERGY_ADDED] == "chargingEnergyAdded"
+    assert WIRE_KEYS[Metric.EXTERNAL_TEMPERATURE] == "externalTemperature"
+    assert WIRE_KEYS[Metric.HVAC_POWER] == "hvacPower"
+    assert WIRE_KEYS[Metric.DRIVING_STATE] == "drivingState"
+    assert WIRE_KEYS[Metric.MAP_INFO] == "mapInfo"
+    assert WIRE_KEYS[Metric.CALIBRATED_CONFIDENCE] == "calibratedConfidence"
+    assert WIRE_KEYS[Metric.SPEED_FACTOR] == "speedFactor"
 
 
 # ---------- null-safety matrix -----------------------------------------------
@@ -154,7 +176,7 @@ def test_charging_state_member_mapping(
 
 
 def test_happy_path_all_metrics() -> None:
-    """All 12 metrics extract from one frame with time + provider."""
+    """All 26 metrics extract from one frame with time + provider."""
     extra = {"time": "2026-05-25T12:00:00Z", "provider": "RIVIAN_STREAM"}
     frame: dict[str, Any] = {
         "vehicleId": 1,
@@ -172,6 +194,28 @@ def test_happy_path_all_metrics() -> None:
         "batteryTemperature": {"c": -4.5, **extra},
         "chargingState": {"state": "CHARGING_DC", **extra},
         "location": {"lat": 57.7, "long": 11.97, **extra},
+        "cabinSetPoint": {"c": 21.0, **extra},
+        "cabinTemperature": {"c": 19.5, **extra},
+        "calibratedMaxSpeed": {"ms": 55.0, **extra},
+        "chargingEnergyAdded": {"wh": 8000.0, **extra},
+        "current": {"a": -150.0, **extra},
+        "drivingState": {"state": "DRIVE", **extra},
+        "elevation": {"m": 42.0, **extra},
+        "externalTemperature": {"c": 12.0, **extra},
+        "heading": {"degrees": 270.0, **extra},
+        "hvacPower": {"w": 1500.0, **extra},
+        "speed": {"ms": 27.5, **extra},
+        # Raw multiplier — must surface unscaled (NOT x100).
+        "speedFactor": {"frac": 0.9, **extra},
+        "calibratedConfidence": {"frac": [0.8, 0.85, 0.9, 0.95], **extra},
+        "mapInfo": {
+            "region": "EUROPE",
+            "country_3": "SWE",
+            "address": "Kungsgatan",
+            "speedLimitMs": 25.0,
+            "isFreeSpeedZone": False,
+            **extra,
+        },
     }
     result = _extract(frame)
     assert set(result) == set(Metric)
@@ -189,6 +233,26 @@ def test_happy_path_all_metrics() -> None:
         Metric.BATTERY_TEMPERATURE: -4.5,
         Metric.CHARGING_STATE: ChargingState.CHARGING_DC,
         Metric.LOCATION: Location(lat=57.7, lon=11.97),
+        Metric.CABIN_SET_POINT: 21.0,
+        Metric.CABIN_TEMPERATURE: 19.5,
+        Metric.CALIBRATED_MAX_SPEED: 55.0,
+        Metric.CHARGING_ENERGY_ADDED: 8000.0,
+        Metric.CURRENT: -150.0,
+        Metric.DRIVING_STATE: DrivingState.DRIVE,
+        Metric.ELEVATION: 42.0,
+        Metric.EXTERNAL_TEMPERATURE: 12.0,
+        Metric.HEADING: 270.0,
+        Metric.HVAC_POWER: 1500.0,
+        Metric.SPEED: 27.5,
+        Metric.SPEED_FACTOR: 0.9,
+        Metric.CALIBRATED_CONFIDENCE: (0.8, 0.85, 0.9, 0.95),
+        Metric.MAP_INFO: MapInfo(
+            region=Region.EUROPE,
+            country_3="SWE",
+            address="Kungsgatan",
+            speed_limit_ms=25.0,
+            is_free_speed_zone=False,
+        ),
     }
     expected_time = datetime(2026, 5, 25, 12, tzinfo=UTC)
     for metric, expected in expected_values.items():
@@ -358,10 +422,14 @@ def test_unknown_charging_state_warns_once_per_set(
     seen: set[str] = set()
     frame = {"chargingState": {"state": "FOO"}}
     assert Metric.CHARGING_STATE not in extract_metrics(
-        frame, unknown_charging_states_seen=seen
+        frame,
+        unknown_charging_states_seen=seen,
+        unknown_driving_states_seen=set(),
     )
     assert Metric.CHARGING_STATE not in extract_metrics(
-        frame, unknown_charging_states_seen=seen
+        frame,
+        unknown_charging_states_seen=seen,
+        unknown_driving_states_seen=set(),
     )
     warnings = [r for r in caplog.records if "FOO" in r.getMessage()]
     assert len(warnings) == 1
@@ -374,8 +442,16 @@ def test_unknown_charging_state_dedup_is_per_set_not_global(
     """Two caller-owned sets (two instances) each warn once — no module-global."""
     caplog.set_level(logging.WARNING, logger="aioabrp._extract")
     frame = {"chargingState": {"state": "FOO"}}
-    extract_metrics(frame, unknown_charging_states_seen=set())
-    extract_metrics(frame, unknown_charging_states_seen=set())
+    extract_metrics(
+        frame,
+        unknown_charging_states_seen=set(),
+        unknown_driving_states_seen=set(),
+    )
+    extract_metrics(
+        frame,
+        unknown_charging_states_seen=set(),
+        unknown_driving_states_seen=set(),
+    )
     warnings = [r for r in caplog.records if "FOO" in r.getMessage()]
     assert len(warnings) == 2
 
@@ -388,7 +464,12 @@ def test_unknown_charging_state_warning_log_name_prefix(
         "chargingState": {"state": "FOO"},
         "soc": {"frac": 0.5, "provider": "RIVIAN_STREAM"},
     }
-    extract_metrics(frame, unknown_charging_states_seen=set(), log_name="acct-1")
+    extract_metrics(
+        frame,
+        unknown_charging_states_seen=set(),
+        unknown_driving_states_seen=set(),
+        log_name="acct-1",
+    )
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
     message = warnings[0].getMessage()
@@ -405,7 +486,360 @@ def test_known_charging_state_never_warns(caplog: pytest.LogCaptureFixture) -> N
     result = extract_metrics(
         {"chargingState": {"state": "NOT_CHARGING"}},
         unknown_charging_states_seen=seen,
+        unknown_driving_states_seen=set(),
     )
     assert result[Metric.CHARGING_STATE].value is ChargingState.NOT_CHARGING
     assert not caplog.records
     assert not seen
+
+
+# ---------- added scalar metrics: units + tolerance --------------------------
+
+
+@pytest.mark.parametrize(
+    ("metric", "frame", "expected"),
+    [
+        # Happy path, raw wire units (no conversion).
+        pytest.param(
+            Metric.CABIN_SET_POINT, {"cabinSetPoint": {"c": 21.0}}, 21.0, id="cabin_sp"
+        ),
+        pytest.param(
+            Metric.CABIN_TEMPERATURE,
+            {"cabinTemperature": {"c": 19.5}},
+            19.5,
+            id="cabin_temp",
+        ),
+        pytest.param(
+            Metric.EXTERNAL_TEMPERATURE,
+            {"externalTemperature": {"c": -3.0}},
+            -3.0,
+            id="ext_temp_subzero",
+        ),
+        pytest.param(
+            Metric.CALIBRATED_MAX_SPEED,
+            {"calibratedMaxSpeed": {"ms": 55.0}},
+            55.0,
+            id="max_speed_ms",
+        ),
+        pytest.param(Metric.SPEED, {"speed": {"ms": 27.5}}, 27.5, id="speed_ms"),
+        pytest.param(
+            Metric.CHARGING_ENERGY_ADDED,
+            {"chargingEnergyAdded": {"wh": 8000.0}},
+            8000.0,
+            id="energy_added_wh",
+        ),
+        pytest.param(
+            Metric.CURRENT, {"current": {"a": -150.0}}, -150.0, id="current_a"
+        ),
+        pytest.param(
+            Metric.ELEVATION, {"elevation": {"m": 42.0}}, 42.0, id="elevation_m"
+        ),
+        pytest.param(
+            Metric.HEADING, {"heading": {"degrees": 270.0}}, 270.0, id="heading"
+        ),
+        pytest.param(
+            Metric.HVAC_POWER, {"hvacPower": {"w": 1500.0}}, 1500.0, id="hvac_w"
+        ),
+        # Degenerate shapes omit (shares the numeric tolerance matrix).
+        pytest.param(Metric.HEADING, {}, None, id="heading_absent"),
+        pytest.param(Metric.HEADING, {"heading": None}, None, id="heading_null"),
+        pytest.param(Metric.HEADING, {"heading": {}}, None, id="heading_empty"),
+        pytest.param(
+            Metric.HEADING,
+            {"heading": {"degrees": None}},
+            None,
+            id="heading_inner_null",
+        ),
+        pytest.param(
+            Metric.HEADING,
+            {"heading": {"degrees": True}},
+            None,
+            id="heading_inner_bool",
+        ),
+        pytest.param(Metric.SPEED, {"speed": {"ms": "27"}}, None, id="speed_inner_str"),
+        pytest.param(
+            Metric.CURRENT,
+            {"current": {"a": float("inf")}},
+            None,
+            id="current_inner_inf",
+        ),
+    ],
+)
+def test_added_scalar_metrics(
+    metric: Metric, frame: dict[str, Any], expected: float | None
+) -> None:
+    result = _extract(frame)
+    if expected is None:
+        assert metric not in result
+    else:
+        assert result[metric].value == expected
+
+
+def test_speed_factor_passes_through_unscaled() -> None:
+    """speed_factor uses leaf ``frac`` but is a raw multiplier — NOT x100."""
+    result = _extract({"speedFactor": {"frac": 0.9}})
+    assert result[Metric.SPEED_FACTOR].value == 0.9
+
+
+def test_added_scalar_int_coerced_to_float() -> None:
+    value = _extract({"elevation": {"m": 42}})[Metric.ELEVATION].value
+    assert value == 42.0
+    assert isinstance(value, float)
+
+
+# ---------- driving_state (categorical, own dedup set) -----------------------
+
+
+@pytest.mark.parametrize(
+    ("wire_member", "expected"),
+    [
+        ("PARK", DrivingState.PARK),
+        ("REVERSE", DrivingState.REVERSE),
+        ("NEUTRAL", DrivingState.NEUTRAL),
+        ("DRIVE", DrivingState.DRIVE),
+    ],
+)
+def test_driving_state_member_mapping(wire_member: str, expected: DrivingState) -> None:
+    result = _extract({"drivingState": {"state": wire_member}})
+    assert result[Metric.DRIVING_STATE].value is expected
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param({}, id="absent"),
+        pytest.param({"drivingState": None}, id="null"),
+        pytest.param({"drivingState": {}}, id="empty"),
+        pytest.param({"drivingState": {"state": None}}, id="inner_null"),
+        pytest.param({"drivingState": {"state": ""}}, id="inner_empty_string"),
+        pytest.param({"drivingState": {"state": 123}}, id="inner_int"),
+        pytest.param({"drivingState": {"state": "FLYING"}}, id="unrecognized_member"),
+    ],
+)
+def test_driving_state_degenerate_shapes_omitted(frame: dict[str, Any]) -> None:
+    assert Metric.DRIVING_STATE not in _extract(frame)
+
+
+def test_unknown_driving_state_warns_once_per_set(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="aioabrp._extract")
+    seen: set[str] = set()
+    frame = {"drivingState": {"state": "FLYING"}}
+    for _ in range(2):
+        assert Metric.DRIVING_STATE not in extract_metrics(
+            frame,
+            unknown_charging_states_seen=set(),
+            unknown_driving_states_seen=seen,
+        )
+    warnings = [r for r in caplog.records if "FLYING" in r.getMessage()]
+    assert len(warnings) == 1
+    assert seen == {"FLYING"}
+
+
+def test_driving_and_charging_drift_use_separate_sets(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A driving-state set must not suppress a charging-state warning, or vice versa."""
+    caplog.set_level(logging.WARNING, logger="aioabrp._extract")
+    charging_seen: set[str] = set()
+    driving_seen: set[str] = set()
+    frame = {
+        "chargingState": {"state": "WARP"},
+        "drivingState": {"state": "WARP"},
+    }
+    extract_metrics(
+        frame,
+        unknown_charging_states_seen=charging_seen,
+        unknown_driving_states_seen=driving_seen,
+    )
+    messages = [r.getMessage() for r in caplog.records]
+    # The same wire token "WARP" drifts on both enums — each warns once,
+    # tracked in its own set.
+    assert charging_seen == {"WARP"}
+    assert driving_seen == {"WARP"}
+    assert sum("chargingState" in m for m in messages) == 1
+    assert sum("drivingState" in m for m in messages) == 1
+
+
+def test_unknown_driving_state_warning_is_token_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="aioabrp._extract")
+    frame = {
+        "drivingState": {"state": "FLYING", "provider": "RIVIAN_STREAM"},
+        "mapInfo": {"address": "Kungsgatan"},
+    }
+    extract_metrics(
+        frame,
+        unknown_charging_states_seen=set(),
+        unknown_driving_states_seen=set(),
+        log_name="acct-2",
+    )
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert message.startswith("acct-2")
+    assert "FLYING" in message
+    # PII contract: never the address or any other payload content.
+    assert "Kungsgatan" not in message
+    assert "RIVIAN_STREAM" not in message
+
+
+# ---------- calibrated_confidence (array -> tuple) ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        pytest.param(
+            {"calibratedConfidence": {"frac": [0.8]}}, (0.8,), id="single_value"
+        ),
+        pytest.param(
+            {"calibratedConfidence": {"frac": [0.8, 0.85, 0.9, 0.95]}},
+            (0.8, 0.85, 0.9, 0.95),
+            id="four_values",
+        ),
+        pytest.param(
+            {"calibratedConfidence": {"frac": [1, 0]}},
+            (1.0, 0.0),
+            id="ints_coerced_to_float",
+        ),
+    ],
+)
+def test_calibrated_confidence_happy(
+    frame: dict[str, Any], expected: tuple[float, ...]
+) -> None:
+    value = _extract(frame)[Metric.CALIBRATED_CONFIDENCE].value
+    assert value == expected
+    assert all(isinstance(v, float) for v in value)
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param({}, id="absent"),
+        pytest.param({"calibratedConfidence": None}, id="null"),
+        pytest.param({"calibratedConfidence": {}}, id="empty_block"),
+        pytest.param({"calibratedConfidence": {"frac": None}}, id="leaf_null"),
+        pytest.param({"calibratedConfidence": {"frac": []}}, id="empty_array"),
+        pytest.param({"calibratedConfidence": {"frac": 0.8}}, id="leaf_not_a_list"),
+        pytest.param(
+            {"calibratedConfidence": {"frac": [0.8, None]}}, id="element_null"
+        ),
+        pytest.param({"calibratedConfidence": {"frac": [0.8, "x"]}}, id="element_str"),
+        pytest.param(
+            {"calibratedConfidence": {"frac": [0.8, True]}}, id="element_bool"
+        ),
+        pytest.param(
+            {"calibratedConfidence": {"frac": [0.8, float("nan")]}},
+            id="element_nan",
+        ),
+    ],
+)
+def test_calibrated_confidence_degenerate_shapes_omitted(
+    frame: dict[str, Any],
+) -> None:
+    assert Metric.CALIBRATED_CONFIDENCE not in _extract(frame)
+
+
+# ---------- map_info (struct, per-subfield tolerance) ------------------------
+
+
+def test_map_info_full_block() -> None:
+    result = _extract(
+        {
+            "mapInfo": {
+                "region": "EUROPE",
+                "country_3": "SWE",
+                "address": "Kungsgatan",
+                "speedLimitMs": 25.0,
+                "isFreeSpeedZone": False,
+            }
+        }
+    )
+    assert result[Metric.MAP_INFO].value == MapInfo(
+        region=Region.EUROPE,
+        country_3="SWE",
+        address="Kungsgatan",
+        speed_limit_ms=25.0,
+        is_free_speed_zone=False,
+    )
+
+
+def test_map_info_partial_block_keeps_present_subfields() -> None:
+    result = _extract({"mapInfo": {"country_3": "USA", "speedLimitMs": 30}})
+    assert result[Metric.MAP_INFO].value == MapInfo(
+        region=None,
+        country_3="USA",
+        address=None,
+        speed_limit_ms=30.0,
+        is_free_speed_zone=None,
+    )
+
+
+def test_map_info_unknown_region_degrades_to_none_keeping_rest() -> None:
+    """An unrecognized region nulls only that subfield — the block survives."""
+    result = _extract({"mapInfo": {"region": "ATLANTIS", "country_3": "SWE"}})
+    assert result[Metric.MAP_INFO].value == MapInfo(
+        region=None,
+        country_3="SWE",
+        address=None,
+        speed_limit_ms=None,
+        is_free_speed_zone=None,
+    )
+
+
+def test_map_info_falsy_valid_subfields_are_present_not_omitted() -> None:
+    """speed_limit_ms=0.0 and is_free_speed_zone=False are real values, not 'absent'."""
+    result = _extract({"mapInfo": {"speedLimitMs": 0.0, "isFreeSpeedZone": False}})
+    value = result[Metric.MAP_INFO].value
+    assert value.speed_limit_ms == 0.0
+    assert value.is_free_speed_zone is False
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param({}, id="absent"),
+        pytest.param({"mapInfo": None}, id="null"),
+        pytest.param({"mapInfo": {}}, id="empty_block"),
+        pytest.param({"mapInfo": [1, 2]}, id="non_dict"),
+        # Dict present but every subfield malformed -> omit (no all-None struct).
+        pytest.param(
+            {
+                "mapInfo": {
+                    "region": "ATLANTIS",
+                    "country_3": 7,
+                    "address": None,
+                    "speedLimitMs": "fast",
+                    "isFreeSpeedZone": "yes",
+                }
+            },
+            id="all_subfields_malformed",
+        ),
+    ],
+)
+def test_map_info_omitted_when_no_subfield_survives(frame: dict[str, Any]) -> None:
+    assert Metric.MAP_INFO not in _extract(frame)
+
+
+def test_map_info_is_free_speed_zone_requires_genuine_bool() -> None:
+    """The boolean subfield rejects truthy non-bools (1/"true") -> None."""
+    result = _extract({"mapInfo": {"isFreeSpeedZone": 1, "country_3": "SWE"}})
+    assert result[Metric.MAP_INFO].value.is_free_speed_zone is None
+
+
+def test_added_struct_metrics_carry_time_and_provider() -> None:
+    """map_info / calibrated_confidence flow through the same time+provider path."""
+    extra = {"time": "2026-05-25T12:00:00Z", "provider": "RIVIAN_STREAM"}
+    result = _extract(
+        {
+            "mapInfo": {"country_3": "SWE", **extra},
+            "calibratedConfidence": {"frac": [0.9], **extra},
+        }
+    )
+    for metric in (Metric.MAP_INFO, Metric.CALIBRATED_CONFIDENCE):
+        mv = result[metric]
+        assert mv.time == datetime(2026, 5, 25, 12, tzinfo=UTC)
+        assert mv.provider == "RIVIAN_STREAM"

@@ -160,9 +160,12 @@ class TelemetryStream:
             for vehicle_id, times in seed.items():
                 for metric, wire_time in times.items():
                     self._last_times[(vehicle_id, metric)] = _clamp_time(wire_time, now)
-        # Instance-scoped dedup set for the unrecognized-chargingState
-        # warning (never module-global — multi-account safety).
+        # Instance-scoped dedup sets for the unrecognized-chargingState /
+        # drivingState warnings (never module-global — multi-account
+        # safety). Separate sets so one enum's drift never suppresses the
+        # other's warning.
         self._unknown_charging_states_seen: set[str] = set()
+        self._unknown_driving_states_seen: set[str] = set()
 
     async def start(self) -> None:
         """Start the background SSE consumer task.
@@ -468,6 +471,7 @@ class TelemetryStream:
         extracted = extract_metrics(
             frame,
             unknown_charging_states_seen=self._unknown_charging_states_seen,
+            unknown_driving_states_seen=self._unknown_driving_states_seen,
             log_name=self._name,
         )
         # One clock read per frame; future block times are rewritten to now

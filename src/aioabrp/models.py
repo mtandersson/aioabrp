@@ -22,6 +22,20 @@ class Metric(StrEnum):
     BATTERY_TEMPERATURE = "battery_temperature"
     CHARGING_STATE = "charging_state"
     LOCATION = "location"
+    CABIN_SET_POINT = "cabin_set_point"
+    CABIN_TEMPERATURE = "cabin_temperature"
+    CALIBRATED_MAX_SPEED = "calibrated_max_speed"
+    CHARGING_ENERGY_ADDED = "charging_energy_added"
+    CURRENT = "current"
+    DRIVING_STATE = "driving_state"
+    ELEVATION = "elevation"
+    EXTERNAL_TEMPERATURE = "external_temperature"
+    HEADING = "heading"
+    HVAC_POWER = "hvac_power"
+    MAP_INFO = "map_info"
+    SPEED = "speed"
+    SPEED_FACTOR = "speed_factor"
+    CALIBRATED_CONFIDENCE = "calibrated_confidence"
 
 
 class ChargingState(StrEnum):
@@ -34,6 +48,28 @@ class ChargingState(StrEnum):
     PLUGGED_IN = "plugged_in"
 
 
+class DrivingState(StrEnum):
+    """Categorical driving state / current gear (closed enum mirroring the wire)."""
+
+    PARK = "park"
+    REVERSE = "reverse"
+    NEUTRAL = "neutral"
+    DRIVE = "drive"
+
+
+class Region(StrEnum):
+    """Coarse world region of the vehicle position (closed enum, mirrors wire)."""
+
+    AFRICA = "africa"
+    ASIA = "asia"
+    AUSTRALIA = "australia"
+    CENTRAL_AMERICA = "central_america"
+    EUROPE = "europe"
+    NORTH_AMERICA = "north_america"
+    SOUTH_AMERICA = "south_america"
+    OCEANIA = "oceania"
+
+
 @dataclass(frozen=True, slots=True)
 class Location:
     """A GPS coordinate pair."""
@@ -43,14 +79,39 @@ class Location:
 
 
 @dataclass(frozen=True, slots=True)
+class MapInfo:
+    """Additional map-related context for the vehicle position.
+
+    Every subfield is independently optional: the wire ``mapInfo`` block
+    carries no required leaf, so any subfield absent / malformed on the
+    wire surfaces as ``None`` while the rest of the block is preserved.
+    ``speed_limit_ms`` keeps the wire's raw m/s unit (no conversion).
+    """
+
+    region: Region | None
+    country_3: str | None
+    address: str | None
+    speed_limit_ms: float | None
+    is_free_speed_zone: bool | None
+
+
+@dataclass(frozen=True, slots=True)
 class MetricValue[T]:
     """One extracted metric value.
 
-    Generic over the value type ``T`` (``float`` for numeric metrics,
-    ``ChargingState`` for the categorical metric, ``Location`` for the GPS
-    pair). Units are fixed per metric: percent (soc/soh), W, V, Wh, m, °C,
-    Wh/km. ``time`` is the wire block's tz-aware timestamp or ``None``;
-    ``provider`` is the clean upstream provider string or ``None``.
+    Generic over the value type ``T``: ``float`` for numeric metrics,
+    ``ChargingState`` / ``DrivingState`` for the categorical metrics,
+    ``Location`` for the GPS pair, ``MapInfo`` for the map-context struct,
+    and ``tuple[float, ...]`` for ``calibrated_confidence`` (a 1- or
+    4-element array). Units keep the raw ABRP wire scale (no conversion):
+    percent (soc/soh - frac surfaced x100), W (power/hvac_power), V, A
+    (current), Wh (soe/battery_capacity/charging_energy_added), m
+    (odometer/range/elevation), m/s (speed/calibrated_max_speed),
+    degrees (heading), °C (battery/cabin/external temperatures), Wh/km
+    (calibrated_ref_cons), and dimensionless fractions (speed_factor,
+    calibrated_confidence). ``time`` is the wire block's tz-aware
+    timestamp or ``None``; ``provider`` is the clean upstream provider
+    string or ``None``.
     """
 
     value: T
@@ -79,6 +140,20 @@ class Telemetry:
     battery_temperature: MetricValue[float] | None = None
     charging_state: MetricValue[ChargingState] | None = None
     location: MetricValue[Location] | None = None
+    cabin_set_point: MetricValue[float] | None = None
+    cabin_temperature: MetricValue[float] | None = None
+    calibrated_max_speed: MetricValue[float] | None = None
+    charging_energy_added: MetricValue[float] | None = None
+    current: MetricValue[float] | None = None
+    driving_state: MetricValue[DrivingState] | None = None
+    elevation: MetricValue[float] | None = None
+    external_temperature: MetricValue[float] | None = None
+    heading: MetricValue[float] | None = None
+    hvac_power: MetricValue[float] | None = None
+    map_info: MetricValue[MapInfo] | None = None
+    speed: MetricValue[float] | None = None
+    speed_factor: MetricValue[float] | None = None
+    calibrated_confidence: MetricValue[tuple[float, ...]] | None = None
 
     def items(self) -> Iterator[tuple[Metric, MetricValue[Any]]]:
         """Yield ``(Metric, MetricValue)`` for every present (non-None) field.

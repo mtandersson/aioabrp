@@ -90,6 +90,46 @@ from your own auth flow and is handed to the library through `AbstractAuth`.
 
 These behaviors are pinned by the test suite; consumers may rely on them.
 
+### Metrics and units
+
+The library surfaces every metric ABRP's v2 telemetry `OutputPoint`
+exposes — a 1:1 mirror of the 26 wire fields — as members of the `Metric`
+enum, each carrying a `MetricValue[T]`. **Values keep the raw ABRP wire
+scale; the library performs no unit conversion** (rendering is consumer
+policy):
+
+| Metric(s) | `value` type | Unit |
+| --- | --- | --- |
+| `soc`, `soh` | `float` | percent (wire `frac` surfaced ×100; `soh` not clamped) |
+| `power`, `hvac_power` | `float` | W |
+| `voltage` | `float` | V |
+| `current` | `float` | A |
+| `soe`, `battery_capacity`, `charging_energy_added` | `float` | Wh |
+| `odometer`, `range`, `elevation` | `float` | m |
+| `speed`, `calibrated_max_speed` | `float` | m/s |
+| `heading` | `float` | degrees |
+| `battery_temperature`, `cabin_set_point`, `cabin_temperature`, `external_temperature` | `float` | °C |
+| `calibrated_ref_cons` | `float` | Wh/km |
+| `speed_factor` | `float` | dimensionless multiplier |
+| `charging_state` | `ChargingState` | closed enum |
+| `driving_state` | `DrivingState` | closed enum (gear) |
+| `location` | `Location` | lat/lon |
+| `calibrated_confidence` | `tuple[float, ...]` | 1- or 4-element confidence vector (opaque; not interpreted) |
+| `map_info` | `MapInfo` | struct: `region` (enum), `country_3`, `address`, `speed_limit_ms` (m/s), `is_free_speed_zone` |
+
+Notes:
+
+- A frame is a **sparse delta**: `Telemetry.items()` yields only the
+  metrics present in that frame, and may yield **any of the 26**.
+  Consumers that map `Metric` onto something else (e.g. an entity table)
+  must tolerate members they don't handle rather than assume a fixed set.
+- A categorical wire member the library doesn't recognize (an unknown
+  `charging_state` / `driving_state`) **omits** that metric rather than
+  leaking a raw string, and logs one warning per stream instance.
+- `map_info` subfields are each independently optional; an unrecognized
+  `region` degrades to `None` while the rest of the struct survives. A
+  `map_info` block with no usable subfield is omitted entirely.
+
 ### Callbacks
 
 - `on_update` and `on_connection_change` are **synchronous** callbacks,
@@ -163,9 +203,11 @@ tests).
 Enable the `aioabrp` logger at `DEBUG` for triage. Connect/disconnect and
 reasons log at `INFO`, watchdog stalls at `WARNING`, per-frame activity at
 `DEBUG`. Frames are logged as keys and sizes only — frame bodies, header
-values, and tokens (including GPS coordinates and other PII) are never
-logged. Pass `name=` to `TelemetryStream` to prefix its log lines when
-running multiple streams.
+values, and tokens (including GPS coordinates, the `map_info` street
+address, and other PII) are never logged. The unknown-enum warnings
+carry only the unrecognized member token, never any payload content.
+Pass `name=` to `TelemetryStream` to prefix its log lines when running
+multiple streams.
 
 ## Development
 
