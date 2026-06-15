@@ -4,13 +4,24 @@ from importlib.metadata import version
 
 import aiohttp
 from aioresponses import aioresponses
+from packaging.version import Version
 
 import aioabrp
 
 
 def test_version() -> None:
-    """The package imports and its version matches the installed metadata."""
+    """The installed package exposes a real, well-formed version.
+
+    With the version derived from the git tag via hatch-vcs, ``__version__``
+    and the installed metadata resolve from the same source, so equality is
+    tautological. The load-bearing checks are that the package is actually
+    installed under its declared name (not the uninstalled ``0.0.0``
+    fallback) and that the resolved version is valid PEP 440.
+    """
     assert aioabrp.__version__ == version("aioabrp")
+    assert aioabrp.__version__ != "0.0.0"
+    # Parses as a valid PEP 440 version (raises InvalidVersion otherwise).
+    Version(aioabrp.__version__)
 
 
 async def test_aioresponses_mocks_aiohttp_get() -> None:
