@@ -18,6 +18,7 @@ from .models import (
     MetricValue,
     Region,
     Telemetry,
+    VehicleModelDisplay,
 )
 from .stream import TelemetryStream
 
@@ -48,5 +49,6 @@ __all__ = [
     "StaticAuth",
     "Telemetry",
     "TelemetryStream",
+    "VehicleModelDisplay",
     "__version__",
 ]

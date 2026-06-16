@@ -10,6 +10,7 @@ EXPECTED_PUBLIC_API = {
     "TelemetryStream",
     "AbrpVehicle",
     "CatalogEntry",
+    "VehicleModelDisplay",
     "Metric",
     "MetricValue",
     "Telemetry",

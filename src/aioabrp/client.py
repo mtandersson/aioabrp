@@ -14,6 +14,8 @@ Wire surface:
 * ``GET /2/vehicle/_list`` — vehicle catalog (bare JSON, no envelope).
 * ``GET /2/tlm/{vehicle_id}`` — one-shot telemetry snapshot (bare JSON),
   extracted into the library's typed event shape.
+* ``GET /2/vehicle-model/by-typecode/{typecode}/display`` — per-typecode
+  display metadata (bare JSON, no envelope).
 
 The v2 endpoints split auth across two headers: the static partner key
 in ``X-API-KEY`` and the per-user session token in ``X-ABRP-SESSION``.
@@ -31,6 +33,7 @@ import re
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
+from urllib.parse import quote
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
@@ -48,12 +51,13 @@ from .const import (
     ENDPOINT_GET_TLM,
     ENDPOINT_TLM,
     ENDPOINT_VEHICLE_LIST,
+    ENDPOINT_VEHICLE_MODEL_DISPLAY,
     HEADER_ABRP_SESSION,
     HEADER_API_KEY,
     ONE_SHOT_TIMEOUT_SECONDS,
 )
 from .exceptions import AbrpApiError, AbrpAuthError
-from .models import AbrpVehicle, CatalogEntry, Telemetry
+from .models import AbrpVehicle, CatalogEntry, Telemetry, VehicleModelDisplay
 
 # Heuristic match against the v1 envelope ``error`` text. The keywords are
 # word-bounded to avoid matching unrelated business errors that happen to
@@ -228,6 +232,33 @@ class AbrpClient:
         extracted = clamp_future_times(extracted, _clock._now())
         return Telemetry(**{metric.value: value for metric, value in extracted.items()})
 
+    async def async_get_vehicle_model_display(
+        self, typecode: str
+    ) -> VehicleModelDisplay:
+        """Fetch display metadata for one typecode.
+
+        ``GET /2/vehicle-model/by-typecode/{typecode}/display`` returns the
+        bare ``VehicleModelDisplay`` JSON (no envelope): manufacturer, model,
+        the raw model-year string, the server-parsed start/end years (when
+        derivable), and the display title. ``typecode`` is percent-encoded
+        into the path segment so a structural character cannot escape it.
+
+        Raises:
+            AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
+                untouched, from the token getter.
+            AbrpApiError: any other 4xx/5xx HTTP (including 404 for an unknown
+                typecode — there is no None/not-found sentinel; catch this to
+                degrade), transport, timeout, parse, or malformed-record
+                failure.
+
+        """
+        payload = await self._get_v2_json(
+            f"{API_BASE_V2}/{ENDPOINT_VEHICLE_MODEL_DISPLAY}"
+            f"/{quote(typecode, safe='')}/display",
+            what="vehicle-model display",
+        )
+        return _parse_vehicle_model_display(payload)
+
     async def _get_v2_json(self, url: str, *, what: str) -> dict[str, Any]:
         """GET a v2 endpoint and return its bare-JSON dict payload.
 
@@ -364,4 +395,39 @@ def _parse_catalog_entry(record: Mapping[str, Any]) -> CatalogEntry | None:
         start_year=_int_or_none(record.get("startYear")),
         end_year=_int_or_none(record.get("endYear")),
         battery_capacity_wh=_int_or_none(record.get("batteryCapacityWh")),
+    )
+
+
+def _require_str(record: Mapping[str, Any], key: str) -> str:
+    """Read a wire-required string field, raising on absence/wrong type.
+
+    Unlike :func:`_str_or_none` (which collapses bad input to ``None`` for the
+    catalog's optional columns), the display schema marks these fields
+    required, so type drift fails loudly as :class:`AbrpApiError` rather than
+    masquerading as a missing value.
+    """
+    value = record.get(key)
+    if not isinstance(value, str):
+        raise AbrpApiError(
+            f"malformed vehicle-model display record: "
+            f"'{key}' must be a string, got {type(value).__name__}"
+        )
+    return value
+
+
+def _parse_vehicle_model_display(record: Mapping[str, Any]) -> VehicleModelDisplay:
+    """Parse the bare display payload into a :class:`VehicleModelDisplay`.
+
+    The four required strings run through :func:`_require_str` (loud failure
+    on absence/wrong type); ``start_year`` / ``end_year`` run through
+    :func:`_int_or_none`, so the server omitting them for open-ended or
+    non-numeric ``years`` cleanly surfaces as ``None``.
+    """
+    return VehicleModelDisplay(
+        manufacturer=_require_str(record, "manufacturer"),
+        model=_require_str(record, "model"),
+        years=_require_str(record, "years"),
+        title=_require_str(record, "title"),
+        start_year=_int_or_none(record.get("startYear")),
+        end_year=_int_or_none(record.get("endYear")),
     )

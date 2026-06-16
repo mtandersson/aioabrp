@@ -3,7 +3,8 @@
 Async Python client for the [A Better Routeplanner](https://abetterrouteplanner.com)
 (ABRP) / Iternio telemetry API. The library mirrors ABRP's API points 1:1 and
 has no Home Assistant dependency: a stateless request/response `AbrpClient`
-(garage, vehicle catalog, one-shot telemetry snapshot) and a resilient
+(garage, vehicle catalog, vehicle-model display metadata, one-shot telemetry
+snapshot) and a resilient
 `TelemetryStream` (server-sent events with reconnect/backoff/watchdog) that
 delivers extracted, typed metric values — never raw wire dicts — to consumer
 callbacks. Authentication is injected: the consumer owns the token lifecycle
