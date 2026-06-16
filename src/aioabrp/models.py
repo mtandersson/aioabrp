@@ -228,3 +228,24 @@ class CatalogEntry:
     start_year: int | None
     end_year: int | None
     battery_capacity_wh: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class VehicleModelDisplay:
+    """Display metadata for one vehicle model, resolved from a typecode.
+
+    Returned by ``GET /2/vehicle-model/by-typecode/{typecode}/display``. The
+    four wire-required strings (``manufacturer``, ``model``, ``years``,
+    ``title``) are always present; ``start_year`` / ``end_year`` are the
+    server's convenience parse of ``years`` and are ``None`` when not
+    derivable — open-ended ranges (``"2021+"`` → no ``end_year``) or
+    non-numeric values (``"Unreleased"`` → neither). The raw ``years`` string
+    is preserved verbatim so consumers can present or re-parse it themselves.
+    """
+
+    manufacturer: str
+    model: str
+    years: str
+    title: str
+    start_year: int | None
+    end_year: int | None

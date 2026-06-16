@@ -7,6 +7,10 @@ API_BASE_V2 = "https://api.iternio.com/2"
 ENDPOINT_GET_TLM = "session/get_tlm"
 ENDPOINT_TLM = "tlm"
 ENDPOINT_VEHICLE_LIST = "vehicle/_list"
+# Path prefix for the per-typecode vehicle-model endpoints; the typecode and
+# the ``/display`` action are appended by the client
+# (``vehicle-model/by-typecode/{typecode}/display``).
+ENDPOINT_VEHICLE_MODEL_DISPLAY = "vehicle-model/by-typecode"
 
 # v2 splits auth across two headers: the static partner key in ``X-API-KEY``
 # and the per-user session (OAuth ``access_token``) in ``X-ABRP-SESSION``.

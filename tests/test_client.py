@@ -6,6 +6,7 @@ The wire surface under test:
 * ``POST /1/session/get_tlm`` — garage enumeration (v1 envelope)
 * ``GET /2/vehicle/_list`` — vehicle catalog (bare JSON)
 * ``GET /2/tlm/{vehicle_id}`` — one-shot telemetry (bare JSON -> typed)
+* ``GET /2/vehicle-model/by-typecode/{typecode}/display`` — display metadata
 
 Auth-vs-generic error routing on the v1 envelope uses the word-bounded
 keyword heuristic on the ``error`` text.
@@ -17,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
 from unittest.mock import Mock
+from urllib.parse import quote
 
 import aiohttp
 import pytest
@@ -32,9 +34,17 @@ from aioabrp.const import (
     ENDPOINT_GET_TLM,
     ENDPOINT_TLM,
     ENDPOINT_VEHICLE_LIST,
+    ENDPOINT_VEHICLE_MODEL_DISPLAY,
 )
 from aioabrp.exceptions import AbrpApiError, AbrpAuthError
-from aioabrp.models import AbrpVehicle, ChargingState, Location, Metric, Telemetry
+from aioabrp.models import (
+    AbrpVehicle,
+    ChargingState,
+    Location,
+    Metric,
+    Telemetry,
+    VehicleModelDisplay,
+)
 
 API_KEY = "mock-partner-key"
 ACCESS_TOKEN = "mock-access-token"
@@ -43,9 +53,19 @@ VEHICLE_NAME = "Rivian R2 2027 Standard Long Range"
 VEHICLE_MODEL = "rivian:r2:26:ncma91:rwd:w21"
 PAINT = "WHITE"
 
+DISPLAY_TYPECODE = "rivian:r1s:22:large"
+
 VEHICLES_URL = f"{API_BASE_V1}/{ENDPOINT_GET_TLM}"
 CATALOG_URL = f"{API_BASE_V2}/{ENDPOINT_VEHICLE_LIST}"
 ONE_SHOT_URL = f"{API_BASE_V2}/{ENDPOINT_TLM}/{VEHICLE_ID}"
+
+
+def display_url(typecode: str = DISPLAY_TYPECODE) -> str:
+    """Build the vehicle-model display URL for ``typecode`` (path-encoded)."""
+    return (
+        f"{API_BASE_V2}/{ENDPOINT_VEHICLE_MODEL_DISPLAY}"
+        f"/{quote(typecode, safe='')}/display"
+    )
 
 
 # ---------- fixtures and builders --------------------------------------------
@@ -147,6 +167,20 @@ _WIRE_TO_SNAKE: dict[str, str] = {
     "endYear": "end_year",
     "batteryCapacityWh": "battery_capacity_wh",
 }
+
+
+def build_display_record(**overrides: Any) -> dict[str, Any]:
+    """Build a ``VehicleModelDisplay`` wire record (v2 is all-camelCase)."""
+    base: dict[str, Any] = {
+        "manufacturer": "Rivian",
+        "model": "R1S",
+        "years": "2022-2023",
+        "startYear": 2022,
+        "endYear": 2023,
+        "title": "R1S Adventure",
+    }
+    base.update(overrides)
+    return base
 
 
 async def _get_single_catalog_entry(
@@ -856,6 +890,221 @@ async def test_get_current_telemetry_unknown_charging_state_dedup(
     assert len(warnings) == 2
 
 
+# ---------- async_get_vehicle_model_display -----------------------------------
+
+
+async def test_get_vehicle_model_display_happy_path(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """A full display record parses into a populated VehicleModelDisplay."""
+    mock_api.get(display_url(), payload=build_display_record())
+
+    display = await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+    assert isinstance(display, VehicleModelDisplay)
+    assert display.manufacturer == "Rivian"
+    assert display.model == "R1S"
+    assert display.years == "2022-2023"
+    assert display.title == "R1S Adventure"
+    assert display.start_year == 2022
+    assert display.end_year == 2023
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_years", "expected_start", "expected_end"),
+    [
+        pytest.param(
+            {"years": "2019", "startYear": 2019, "endYear": 2019},
+            "2019",
+            2019,
+            2019,
+            id="single_year",
+        ),
+        pytest.param(
+            {"years": "2021+", "startYear": 2021},
+            "2021+",
+            2021,
+            None,
+            id="open_ended_range_no_end_year",
+        ),
+        pytest.param(
+            {"years": "Unreleased"},
+            "Unreleased",
+            None,
+            None,
+            id="non_numeric_no_parsed_years",
+        ),
+    ],
+)
+async def test_get_vehicle_model_display_year_variants(
+    client: AbrpClient,
+    mock_api: aioresponses,
+    overrides: dict[str, Any],
+    expected_years: str,
+    expected_start: int | None,
+    expected_end: int | None,
+) -> None:
+    """The raw ``years`` string is preserved; omitted parsed years are None.
+
+    The server omits ``startYear``/``endYear`` for open-ended ("2021+") or
+    non-numeric ("Unreleased") values, which must surface as None without
+    disturbing the always-present raw ``years`` string.
+    """
+    record = build_display_record(**overrides)
+    for key in ("startYear", "endYear"):
+        if key not in overrides:
+            record.pop(key, None)
+    mock_api.get(display_url(), payload=record)
+
+    display = await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+    assert display.years == expected_years
+    assert display.start_year == expected_start
+    assert display.end_year == expected_end
+
+
+async def test_get_vehicle_model_display_request_shape(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """Outgoing request: GET + Accept/X-API-KEY/X-ABRP-SESSION + 30s budget."""
+    mock_api.get(display_url(), payload=build_display_record())
+
+    await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+    calls = mock_api.requests[("GET", URL(display_url()))]
+    assert len(calls) == 1
+    kwargs = calls[0].kwargs
+    assert kwargs["headers"] == {
+        "Accept": "application/json",
+        "X-API-KEY": API_KEY,
+        "X-ABRP-SESSION": ACCESS_TOKEN,
+    }
+    assert kwargs["timeout"] == aiohttp.ClientTimeout(total=30)
+
+
+async def test_get_vehicle_model_display_encodes_typecode_path_segment(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """A typecode is percent-encoded into a single path segment.
+
+    A structural character such as ``/`` must not split the typecode into
+    extra path segments; ``raw_path`` keeps the encoded ``%2F`` rather than
+    a literal slash. (Colons normalise away under yarl, so a slash is the
+    observable proof that encoding is applied.)
+    """
+    typecode = "maker/model:25"
+    mock_api.get(display_url(typecode), payload=build_display_record())
+
+    await client.async_get_vehicle_model_display(typecode)
+
+    (requested_url,) = (url for _method, url in mock_api.requests)
+    assert "maker%2Fmodel" in requested_url.raw_path
+    assert requested_url.raw_path.endswith("/display")
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param({"manufacturer": None}, id="manufacturer_null"),
+        pytest.param({"model": None}, id="model_null"),
+        pytest.param({"years": None}, id="years_null"),
+        pytest.param({"title": None}, id="title_null"),
+        pytest.param({"manufacturer": 123}, id="manufacturer_non_string"),
+        pytest.param({"years": 2022}, id="years_non_string"),
+    ],
+)
+async def test_get_vehicle_model_display_malformed_required_field(
+    client: AbrpClient, mock_api: aioresponses, record: dict[str, Any]
+) -> None:
+    """A missing/null/non-string required field raises AbrpApiError."""
+    payload = build_display_record(**record)
+    for key, value in record.items():
+        if value is None:
+            del payload[key]
+    mock_api.get(display_url(), payload=payload)
+
+    with pytest.raises(AbrpApiError):
+        await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+
+@pytest.mark.parametrize(
+    ("field", "wire_value"),
+    [
+        pytest.param("startYear", True, id="startyear_bool_rejected"),
+        pytest.param("startYear", "2022", id="startyear_string_rejected"),
+        pytest.param("startYear", 2022.0, id="startyear_float_rejected"),
+        pytest.param("endYear", True, id="endyear_bool_rejected"),
+    ],
+)
+async def test_get_vehicle_model_display_strict_year_typing(
+    client: AbrpClient, mock_api: aioresponses, field: str, wire_value: Any
+) -> None:
+    """Wrong-typed parsed-year fields collapse to None (strict int typing)."""
+    mock_api.get(display_url(), payload=build_display_record(**{field: wire_value}))
+
+    display = await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+    snake = "start_year" if field == "startYear" else "end_year"
+    assert getattr(display, snake) is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(HTTPStatus.UNAUTHORIZED, id="401"),
+        pytest.param(HTTPStatus.FORBIDDEN, id="403"),
+    ],
+)
+async def test_get_vehicle_model_display_http_auth_failure(
+    client: AbrpClient, mock_api: aioresponses, status: HTTPStatus
+) -> None:
+    """A 401/403 from the display endpoint raises AbrpAuthError."""
+    mock_api.get(display_url(), status=status)
+
+    with pytest.raises(AbrpAuthError):
+        await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(HTTPStatus.NOT_FOUND, id="404_unknown_typecode"),
+        pytest.param(HTTPStatus.INTERNAL_SERVER_ERROR, id="500"),
+    ],
+)
+async def test_get_vehicle_model_display_http_error_raises_api_error(
+    client: AbrpClient, mock_api: aioresponses, status: HTTPStatus
+) -> None:
+    """Non-2xx other than 401/403 raises AbrpApiError.
+
+    An unknown typecode (404) has no None/empty not-found sentinel — it
+    surfaces as AbrpApiError like every other sibling method, leaving any
+    soft not-found handling to the consumer.
+    """
+    mock_api.get(display_url(), status=status)
+
+    with pytest.raises(AbrpApiError):
+        await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+
+@pytest.mark.parametrize(
+    "mock_kwargs",
+    [
+        pytest.param({"body": "null"}, id="null"),
+        pytest.param({"payload": []}, id="list"),
+        pytest.param({"payload": "just a string"}, id="string"),
+    ],
+)
+async def test_get_vehicle_model_display_rejects_non_dict_payload(
+    client: AbrpClient, mock_api: aioresponses, mock_kwargs: dict[str, Any]
+) -> None:
+    """A JSON-valid non-dict display body raises AbrpApiError."""
+    mock_api.get(display_url(), **mock_kwargs)
+
+    with pytest.raises(AbrpApiError):
+        await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
+
+
 # ---------- auth containment ---------------------------------------------------
 
 _METHOD_CALLS: list[Any] = [
@@ -864,6 +1113,10 @@ _METHOD_CALLS: list[Any] = [
     pytest.param(
         lambda client: client.async_get_current_telemetry(VEHICLE_ID),
         id="telemetry",
+    ),
+    pytest.param(
+        lambda client: client.async_get_vehicle_model_display(DISPLAY_TYPECODE),
+        id="vehicle_model_display",
     ),
 ]
 
