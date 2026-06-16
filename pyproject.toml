@@ -57,10 +57,11 @@ source = "vcs"
 packages = ["src/aioabrp"]
 
 [tool.hatch.build.targets.sdist]
-# Local-only planning files are untracked via .git/info/exclude, which
-# hatchling (unlike .gitignore) does not honor — exclude them explicitly
-# so they never ship in the sdist.
-exclude = ["PLAN.md", "docs/"]
+# The wheel already ships only src/aioabrp; keep the sdist free of dev-only
+# tooling and untracked planning files too. (scripts/ is the manual live-API
+# smoke test, never an installable artifact.) hatchling does not honor
+# .git/info/exclude, so PLAN.md is listed explicitly.
+exclude = ["PLAN.md", "docs/", "scripts/", ".env.example"]
 
 [tool.ruff]
 line-length = 88
@@ -90,6 +91,8 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D1"]
+# scripts/ holds manual smoke-test tooling: printing to stdout is the point.
+"scripts/**" = ["T201"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"

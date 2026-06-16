@@ -23,3 +23,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Local credentials for scripts/ (see .env.example)
+.env
