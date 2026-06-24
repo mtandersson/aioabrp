@@ -6,6 +6,8 @@ import aioabrp
 EXPECTED_PUBLIC_API = {
     "AbstractAuth",
     "StaticAuth",
+    "AbrpIdentity",
+    "parse_unverified_identity",
     "AbrpClient",
     "TelemetryStream",
     "AbrpVehicle",

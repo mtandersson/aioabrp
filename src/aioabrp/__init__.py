@@ -2,7 +2,7 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .auth import AbstractAuth, StaticAuth
+from .auth import AbrpIdentity, AbstractAuth, StaticAuth, parse_unverified_identity
 from .client import AbrpClient
 from .exceptions import AbrpApiError, AbrpAuthError, AbrpError
 from .models import (
@@ -34,6 +34,7 @@ __all__ = [
     "AbrpAuthError",
     "AbrpClient",
     "AbrpError",
+    "AbrpIdentity",
     "AbrpVehicle",
     "AbstractAuth",
     "CatalogEntry",
@@ -51,4 +52,5 @@ __all__ = [
     "TelemetryStream",
     "VehicleModelDisplay",
     "__version__",
+    "parse_unverified_identity",
 ]

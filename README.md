@@ -87,6 +87,25 @@ key from Iternio — see the
 or contact Iternio for a partner API key. The per-user access token comes
 from your own auth flow and is handed to the library through `AbstractAuth`.
 
+### Identity from the OIDC `id_token`
+
+If your auth flow yields an OIDC `id_token`, `parse_unverified_identity` turns it
+into a stable identity — the `sub` claim plus a display name (the `name` → `email`
+preference chain):
+
+```python
+from aioabrp import parse_unverified_identity
+
+identity = parse_unverified_identity(id_token)
+identity.subject       # OIDC `sub` — stable, non-empty; use as your unique id
+identity.display_name  # `name` then `email`, stripped; None if neither present
+```
+
+The decode is **unverified** — it reads claims without checking the signature.
+That is safe only because the token arrives over TLS directly from the issuer
+during the OAuth exchange; never treat the result as authenticated. A malformed
+token or a missing/empty `sub` raises `AbrpAuthError`.
+
 ## Consumer contracts
 
 These behaviors are pinned by the test suite; consumers may rely on them.
