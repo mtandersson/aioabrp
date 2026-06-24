@@ -106,6 +106,13 @@ That is safe only because the token arrives over TLS directly from the issuer
 during the OAuth exchange; never treat the result as authenticated. A malformed
 token or a missing/empty `sub` raises `AbrpAuthError`.
 
+A distinct, similarly named property lives on the vehicle-model display metadata
+returned by `async_get_vehicle_model_display`:
+
+```python
+display.display_name  # "{mfr} {model}" + optional year span + optional trim; always str (never None)
+```
+
 ## Consumer contracts
 
 These behaviors are pinned by the test suite; consumers may rely on them.

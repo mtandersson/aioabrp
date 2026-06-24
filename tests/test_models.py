@@ -22,6 +22,7 @@ from aioabrp import (
     Region,
     StaticAuth,
     Telemetry,
+    VehicleModelDisplay,
 )
 
 
@@ -220,3 +221,79 @@ def test_merge_overlays_present_delta_fields_and_keeps_others() -> None:
 def test_merge_empty_delta_returns_equivalent() -> None:
     base = Telemetry(soc=_mv(80.0))
     assert base.merge(Telemetry()) is base
+
+
+def _make_display(
+    *,
+    manufacturer: str = "Rivian",
+    model: str = "R1S",
+    years: str = "2025",
+    title: str = "Dual Motor",
+    start_year: int | None = 2025,
+    end_year: int | None = None,
+) -> VehicleModelDisplay:
+    return VehicleModelDisplay(
+        manufacturer=manufacturer,
+        model=model,
+        years=years,
+        title=title,
+        start_year=start_year,
+        end_year=end_year,
+    )
+
+
+@pytest.mark.parametrize(
+    ("display", "expected"),
+    [
+        pytest.param(
+            _make_display(start_year=2024, end_year=2025),
+            "Rivian R1S 2024-2025 Dual Motor",
+            id="both_years_present_yields_range",
+        ),
+        pytest.param(
+            _make_display(start_year=2025, end_year=None),
+            "Rivian R1S 2025 Dual Motor",
+            id="start_year_only_yields_bare_year",
+        ),
+        pytest.param(
+            _make_display(start_year=None, end_year=2023),
+            "Rivian R1S Dual Motor",
+            id="end_year_only_drops_year_segment",
+        ),
+        pytest.param(
+            _make_display(start_year=None, end_year=None),
+            "Rivian R1S Dual Motor",
+            id="both_years_missing_drops_year_segment",
+        ),
+        pytest.param(
+            _make_display(title="", start_year=2025),
+            "Rivian R1S 2025",
+            id="empty_title_yields_no_title_segment",
+        ),
+        pytest.param(
+            _make_display(title="   ", start_year=2025),
+            "Rivian R1S 2025",
+            id="whitespace_title_dropped",
+        ),
+        pytest.param(
+            _make_display(title="  Dual Motor  ", start_year=2025),
+            "Rivian R1S 2025 Dual Motor",
+            id="padded_title_stripped",
+        ),
+        pytest.param(
+            _make_display(years="2099", start_year=None, end_year=None),
+            "Rivian R1S Dual Motor",
+            id="years_string_field_ignored",
+        ),
+        pytest.param(
+            _make_display(manufacturer="", start_year=2025, title=""),
+            " R1S 2025",
+            id="manufacturer_joined_verbatim_no_strip",
+        ),
+    ],
+)
+def test_vehicle_model_display_name(
+    display: VehicleModelDisplay,
+    expected: str,
+) -> None:
+    assert display.display_name == expected

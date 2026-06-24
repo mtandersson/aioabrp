@@ -249,3 +249,26 @@ class VehicleModelDisplay:
     title: str
     start_year: int | None
     end_year: int | None
+
+    @property
+    def display_name(self) -> str:
+        """Composed device-card label, e.g. ``"Rivian R2 2026-2027 Long Range"``.
+
+        Build formula: ``"{manufacturer} {model}"`` + optional
+        `` {start_year}-{end_year}`` (or `` {start_year}`` when only the start
+        is known) + optional `` {title}`` (the trim). The year segment is
+        dropped whenever ``start_year`` is ``None`` — covering both "no years"
+        and the open-ended "end-year-only" case. ``title`` is stripped and
+        dropped when blank; ``manufacturer`` and ``model`` are joined verbatim.
+
+        Always returns a ``str`` (never ``None``), unlike the nullable
+        :attr:`AbrpIdentity.display_name` field.
+        """
+        parts = [f"{self.manufacturer} {self.model}"]
+        if self.start_year is not None and self.end_year is not None:
+            parts.append(f"{self.start_year}-{self.end_year}")
+        elif self.start_year is not None:
+            parts.append(str(self.start_year))
+        if title := self.title.strip():
+            parts.append(title)
+        return " ".join(parts)
