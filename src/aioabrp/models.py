@@ -251,20 +251,20 @@ class VehicleModelDisplay:
     end_year: int | None
 
     @property
-    def display_name(self) -> str:
-        """Composed device-card label, e.g. ``"Rivian R2 2026-2027 Long Range"``.
+    def model_name(self) -> str:
+        """Composed model label without the make, e.g. ``"R2 2026-2027 Long Range"``.
 
-        Build formula: ``"{manufacturer} {model}"`` + optional
-        `` {start_year}-{end_year}`` (or `` {start_year}`` when only the start
-        is known) + optional `` {title}`` (the trim). The year segment is
-        dropped whenever ``start_year`` is ``None`` — covering both "no years"
-        and the open-ended "end-year-only" case. ``title`` is stripped and
-        dropped when blank; ``manufacturer`` and ``model`` are joined verbatim.
+        Build formula: ``model`` + optional `` {start_year}-{end_year}`` (or
+        `` {start_year}`` when only the start is known) + optional `` {title}``
+        (the trim). The year segment is dropped whenever ``start_year`` is
+        ``None`` — covering both "no years" and the open-ended "end-year-only"
+        case. ``title`` is stripped and dropped when blank; ``model`` is used
+        verbatim. The raw ``years`` string is never consulted.
 
-        Always returns a ``str`` (never ``None``), unlike the nullable
-        :attr:`AbrpIdentity.display_name` field.
+        Suits consumers that keep the make in a field of its own, pairing this
+        with :attr:`manufacturer`.
         """
-        parts = [f"{self.manufacturer} {self.model}"]
+        parts = [self.model]
         if self.start_year is not None and self.end_year is not None:
             parts.append(f"{self.start_year}-{self.end_year}")
         elif self.start_year is not None:
@@ -272,3 +272,16 @@ class VehicleModelDisplay:
         if title := self.title.strip():
             parts.append(title)
         return " ".join(parts)
+
+    @property
+    def display_name(self) -> str:
+        """Composed device-card label, e.g. ``"Rivian R2 2026-2027 Long Range"``.
+
+        ``manufacturer`` joined verbatim to :attr:`model_name` by a single
+        space — see that property for the year and trim rules. Because the join
+        is unconditional, a blank ``manufacturer`` yields a leading space.
+
+        Always returns a ``str`` (never ``None``), unlike the nullable
+        :attr:`AbrpIdentity.display_name` field.
+        """
+        return f"{self.manufacturer} {self.model_name}"

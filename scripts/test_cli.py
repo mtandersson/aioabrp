@@ -105,6 +105,11 @@ def _print_display(typecode: str, display: VehicleModelDisplay) -> None:
         f"(years={display.years!r} start={display.start_year} end={display.end_year})",
         flush=True,
     )
+    print(
+        f"[{_stamp()}] {'':<36} "
+        f"model_name={display.model_name!r} display_name={display.display_name!r}",
+        flush=True,
+    )
 
 
 def _on_update(vehicle_id: int, telemetry: Telemetry) -> None:

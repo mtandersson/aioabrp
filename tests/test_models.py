@@ -297,3 +297,78 @@ def test_vehicle_model_display_name(
     expected: str,
 ) -> None:
     assert display.display_name == expected
+
+
+# (id, display, expected model_name) — mirrors the display_name cases above with
+# the make stripped. Shared so the delegation invariant runs over the same inputs.
+_MODEL_NAME_CASES: list[tuple[str, VehicleModelDisplay, str]] = [
+    (
+        "both_years_present_yields_range",
+        _make_display(start_year=2024, end_year=2025),
+        "R1S 2024-2025 Dual Motor",
+    ),
+    (
+        "start_year_only_yields_bare_year",
+        _make_display(start_year=2025, end_year=None),
+        "R1S 2025 Dual Motor",
+    ),
+    (
+        "end_year_only_drops_year_segment",
+        _make_display(start_year=None, end_year=2023),
+        "R1S Dual Motor",
+    ),
+    (
+        "both_years_missing_drops_year_segment",
+        _make_display(start_year=None, end_year=None),
+        "R1S Dual Motor",
+    ),
+    (
+        "empty_title_yields_no_title_segment",
+        _make_display(title="", start_year=2025),
+        "R1S 2025",
+    ),
+    (
+        "whitespace_title_dropped",
+        _make_display(title="   ", start_year=2025),
+        "R1S 2025",
+    ),
+    (
+        "padded_title_stripped",
+        _make_display(title="  Dual Motor  ", start_year=2025),
+        "R1S 2025 Dual Motor",
+    ),
+    (
+        "years_string_field_ignored",
+        _make_display(years="2099", start_year=None, end_year=None),
+        "R1S Dual Motor",
+    ),
+    (
+        "manufacturer_absent_from_model_name",
+        _make_display(manufacturer="", start_year=2025, title=""),
+        "R1S 2025",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("display", "expected"),
+    [
+        pytest.param(display, expected, id=id_)
+        for id_, display, expected in _MODEL_NAME_CASES
+    ],
+)
+def test_vehicle_model_model_name(
+    display: VehicleModelDisplay,
+    expected: str,
+) -> None:
+    assert display.model_name == expected
+
+
+@pytest.mark.parametrize(
+    "display",
+    [pytest.param(display, id=id_) for id_, display, _ in _MODEL_NAME_CASES],
+)
+def test_vehicle_model_display_name_is_manufacturer_plus_model_name(
+    display: VehicleModelDisplay,
+) -> None:
+    assert display.display_name == f"{display.manufacturer} {display.model_name}"

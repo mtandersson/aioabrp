@@ -106,12 +106,20 @@ That is safe only because the token arrives over TLS directly from the issuer
 during the OAuth exchange; never treat the result as authenticated. A malformed
 token or a missing/empty `sub` raises `AbrpAuthError`.
 
-A distinct, similarly named property lives on the vehicle-model display metadata
-returned by `async_get_vehicle_model_display`:
+Distinct, similarly named properties live on the vehicle-model display metadata
+returned by `async_get_vehicle_model_display`. Its six fields mirror the wire
+payload verbatim; two properties pre-assemble them into labels:
 
 ```python
-display.display_name  # "{mfr} {model}" + optional year span + optional trim; always str (never None)
+display.manufacturer  # "Rivian" — wire field, as are model/years/title/start_year/end_year
+display.model_name    # "R1S 2021-2024 Large Pack Performance" — make omitted
+display.display_name  # "Rivian R1S 2021-2024 Large Pack Performance"
 ```
+
+Both labels are always `str` (never `None`) and compose `model` + optional year
+span + optional trim; `display_name` is `manufacturer` joined to `model_name` by
+a single space. Prefer `model_name` where the make already has a field of its
+own, pairing it with `manufacturer`.
 
 ## Consumer contracts
 
