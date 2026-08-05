@@ -251,6 +251,19 @@ def _make_display(
             id="both_years_present_yields_range",
         ),
         pytest.param(
+            _make_display(years="2024", start_year=2024, end_year=2024),
+            "Rivian R1S 2024 Dual Motor",
+            id="equal_years_collapse_to_bare_year",
+        ),
+        # Deliberate, not a bug: the server's pair is authoritative, never
+        # reordered or range-checked. Normalising would invent a year window
+        # ABRP never reported. See VehicleModelDisplay.model_name.
+        pytest.param(
+            _make_display(start_year=2024, end_year=2020),
+            "Rivian R1S 2024-2020 Dual Motor",
+            id="inverted_years_render_verbatim",
+        ),
+        pytest.param(
             _make_display(start_year=2025, end_year=None),
             "Rivian R1S 2025 Dual Motor",
             id="start_year_only_yields_bare_year",
@@ -285,6 +298,14 @@ def _make_display(
             "Rivian R1S Dual Motor",
             id="years_string_field_ignored",
         ),
+        # `years` disagreeing with the parsed pair is what pins "never
+        # consulted" — every other case that reaches the year segment has
+        # `years` coincidentally equal to `start_year`.
+        pytest.param(
+            _make_display(years="2099", start_year=2025, end_year=None),
+            "Rivian R1S 2025 Dual Motor",
+            id="years_string_loses_to_parsed_start_year",
+        ),
         pytest.param(
             _make_display(manufacturer="", start_year=2025, title=""),
             " R1S 2025",
@@ -306,6 +327,17 @@ _MODEL_NAME_CASES: list[tuple[str, VehicleModelDisplay, str]] = [
         "both_years_present_yields_range",
         _make_display(start_year=2024, end_year=2025),
         "R1S 2024-2025 Dual Motor",
+    ),
+    (
+        "equal_years_collapse_to_bare_year",
+        _make_display(years="2024", start_year=2024, end_year=2024),
+        "R1S 2024 Dual Motor",
+    ),
+    # Deliberate, not a bug — see the note in the display_name grid above.
+    (
+        "inverted_years_render_verbatim",
+        _make_display(start_year=2024, end_year=2020),
+        "R1S 2024-2020 Dual Motor",
     ),
     (
         "start_year_only_yields_bare_year",
@@ -341,6 +373,12 @@ _MODEL_NAME_CASES: list[tuple[str, VehicleModelDisplay, str]] = [
         "years_string_field_ignored",
         _make_display(years="2099", start_year=None, end_year=None),
         "R1S Dual Motor",
+    ),
+    # See the note in the display_name grid above.
+    (
+        "years_string_loses_to_parsed_start_year",
+        _make_display(years="2099", start_year=2025, end_year=None),
+        "R1S 2025 Dual Motor",
     ),
     (
         "manufacturer_absent_from_model_name",
