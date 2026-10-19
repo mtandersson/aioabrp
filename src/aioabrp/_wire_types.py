@@ -17,11 +17,12 @@ library consumes (``OutputPoint`` for one-shot telemetry payloads,
   cabinSetPoint, cabinTemperature, calibratedMaxSpeed,
   chargingEnergyAdded, current, drivingState, elevation,
   externalTemperature, heading, hvacPower, speed, speedFactor,
-  calibratedConfidence, mapInfo;
+  calibratedConfidence, mapInfo, batteryTemperatureMin,
+  batteryTemperatureMax;
 * ``location`` — carried on the SSE wire and consumed by the
   :attr:`aioabrp.Metric.LOCATION` extractor in :mod:`aioabrp._extract`.
 
-That's 26 surfaced keys → 26 leaf+Output pairs + the mixin chain
+That's 28 surfaced keys → 28 leaf+Output pairs + the mixin chain
 (``WithTime``, ``WithTimeAndProvider``, ``Provider``, ``DateTimeString``)
 + a handful of numeric type aliases (plus the ``ChargingStateValue`` /
 ``DrivingStateValue`` / ``Region`` enum aliases for the categorical
@@ -152,6 +153,22 @@ class BatteryTemperature(TypedDict):
 
 
 class BatteryTemperatureOutput(WithTimeAndProvider, BatteryTemperature):
+    pass
+
+
+class BatteryTemperatureMin(TypedDict):
+    c: TemperatureC
+
+
+class BatteryTemperatureMinOutput(WithTimeAndProvider, BatteryTemperatureMin):
+    pass
+
+
+class BatteryTemperatureMax(TypedDict):
+    c: TemperatureC
+
+
+class BatteryTemperatureMaxOutput(WithTimeAndProvider, BatteryTemperatureMax):
     pass
 
 
@@ -375,6 +392,8 @@ class MapInfoOutput(WithTimeAndProvider, MapInfo):
 class OutputPoint(TypedDict):
     batteryCapacity: NotRequired[BatteryCapacityOutput]
     batteryTemperature: NotRequired[BatteryTemperatureOutput]
+    batteryTemperatureMax: NotRequired[BatteryTemperatureMaxOutput]
+    batteryTemperatureMin: NotRequired[BatteryTemperatureMinOutput]
     cabinSetPoint: NotRequired[CabinSetPointOutput]
     cabinTemperature: NotRequired[CabinTemperatureOutput]
     calibratedConfidence: NotRequired[CalibratedConfidenceOutput]

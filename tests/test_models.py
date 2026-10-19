@@ -68,6 +68,8 @@ def test_metric_values_match_registry_keys() -> None:
         "speed",
         "speed_factor",
         "calibrated_confidence",
+        "battery_temperature_min",
+        "battery_temperature_max",
     }
 
 

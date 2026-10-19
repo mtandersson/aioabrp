@@ -176,7 +176,7 @@ def test_charging_state_member_mapping(
 
 
 def test_happy_path_all_metrics() -> None:
-    """All 26 metrics extract from one frame with time + provider."""
+    """All 28 metrics extract from one frame with time + provider."""
     extra = {"time": "2026-05-25T12:00:00Z", "provider": "RIVIAN_STREAM"}
     frame: dict[str, Any] = {
         "vehicleId": 1,
@@ -192,6 +192,8 @@ def test_happy_path_all_metrics() -> None:
         # Sub-zero pack temp: winter operation is a real wire shape — the
         # extractor must not apply a lower-bound filter.
         "batteryTemperature": {"c": -4.5, **extra},
+        "batteryTemperatureMin": {"c": -6.0, **extra},
+        "batteryTemperatureMax": {"c": -3.0, **extra},
         "chargingState": {"state": "CHARGING_DC", **extra},
         "location": {"lat": 57.7, "long": 11.97, **extra},
         "cabinSetPoint": {"c": 21.0, **extra},
@@ -231,6 +233,8 @@ def test_happy_path_all_metrics() -> None:
         Metric.SOH: pytest.approx(97.0),
         Metric.RANGE: 250000.0,
         Metric.BATTERY_TEMPERATURE: -4.5,
+        Metric.BATTERY_TEMPERATURE_MIN: -6.0,
+        Metric.BATTERY_TEMPERATURE_MAX: -3.0,
         Metric.CHARGING_STATE: ChargingState.CHARGING_DC,
         Metric.LOCATION: Location(lat=57.7, lon=11.97),
         Metric.CABIN_SET_POINT: 21.0,

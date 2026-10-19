@@ -128,7 +128,7 @@ These behaviors are pinned by the test suite; consumers may rely on them.
 ### Metrics and units
 
 The library surfaces every metric ABRP's v2 telemetry `OutputPoint`
-exposes — a 1:1 mirror of the 26 wire fields — as members of the `Metric`
+exposes — a 1:1 mirror of the 28 wire fields — as members of the `Metric`
 enum, each carrying a `MetricValue[T]`. **Values keep the raw ABRP wire
 scale; the library performs no unit conversion** (rendering is consumer
 policy):
@@ -143,7 +143,7 @@ policy):
 | `odometer`, `range`, `elevation` | `float` | m |
 | `speed`, `calibrated_max_speed` | `float` | m/s |
 | `heading` | `float` | degrees |
-| `battery_temperature`, `cabin_set_point`, `cabin_temperature`, `external_temperature` | `float` | °C |
+| `battery_temperature`, `battery_temperature_min`, `battery_temperature_max`, `cabin_set_point`, `cabin_temperature`, `external_temperature` | `float` | °C |
 | `calibrated_ref_cons` | `float` | Wh/km |
 | `speed_factor` | `float` | dimensionless multiplier |
 | `charging_state` | `ChargingState` | closed enum |
@@ -155,7 +155,7 @@ policy):
 Notes:
 
 - A frame is a **sparse delta**: `Telemetry.items()` yields only the
-  metrics present in that frame, and may yield **any of the 26**.
+  metrics present in that frame, and may yield **any of the 28**.
   Consumers that map `Metric` onto something else (e.g. an entity table)
   must tolerate members they don't handle rather than assume a fixed set.
 - A categorical wire member the library doesn't recognize (an unknown

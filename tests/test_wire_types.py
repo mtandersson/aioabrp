@@ -14,7 +14,7 @@ regen-then-prune header: if a future regen re-introduces a pruned field
 and the prune step is forgotten, this test goes loudly RED rather than
 the library silently shipping ~3k LOC of generated noise.
 
-Parametrize floor is one row per surfaced leaf (26 entries) —
+Parametrize floor is one row per surfaced leaf (28 entries) —
 representative-shape would blind the suite to per-leaf wire-key drift
 (e.g. codegen renaming ``frac`` to ``percent`` on ``Soh`` only).
 """
@@ -26,6 +26,8 @@ import pytest
 from aioabrp._wire_types import (
     BatteryCapacity,
     BatteryTemperature,
+    BatteryTemperatureMax,
+    BatteryTemperatureMin,
     CabinSetPoint,
     CabinTemperature,
     CalibratedConfidence,
@@ -72,7 +74,8 @@ _KEEP_SET_LEAVES: tuple[tuple[type, frozenset[str]], ...] = (
     (BatteryTemperature, frozenset({"c"})),
     (ChargingState, frozenset({"state"})),
     (Location, frozenset({"lat", "long"})),
-    # The 14 leaves added to reach the full 26-field OutputPoint mirror.
+    # The leaves added beyond the original 12 to reach the full
+    # OutputPoint mirror.
     (CabinSetPoint, frozenset({"c"})),
     (CabinTemperature, frozenset({"c"})),
     (MaxSpeed, frozenset({"ms"})),
@@ -92,9 +95,11 @@ _KEEP_SET_LEAVES: tuple[tuple[type, frozenset[str]], ...] = (
             {"region", "country_3", "address", "speedLimitMs", "isFreeSpeedZone"}
         ),
     ),
+    (BatteryTemperatureMin, frozenset({"c"})),
+    (BatteryTemperatureMax, frozenset({"c"})),
 )
 
-# The 26 surfaced keys on ``OutputPoint`` after pruning. Anything other
+# The 28 surfaced keys on ``OutputPoint`` after pruning. Anything other
 # than this exact set is a drift signal: extra keys = generator
 # re-introduced a pruned field (regen-without-prune); missing keys =
 # accidental over-prune dropped a surfaced field.
@@ -126,6 +131,8 @@ _EXPECTED_OUTPUT_POINT_KEYS: frozenset[str] = frozenset(
         "speed",
         "speedFactor",
         "calibratedConfidence",
+        "batteryTemperatureMin",
+        "batteryTemperatureMax",
     }
 )
 
@@ -168,11 +175,11 @@ def test_output_leaf_carries_mixin_chain_keys() -> None:
 
 
 def test_output_point_cardinality_pins_surfaced_keys() -> None:
-    """``OutputPoint`` exposes EXACTLY the 26 surfaced wire keys.
+    """``OutputPoint`` exposes EXACTLY the 28 surfaced wire keys.
 
     Doubles as a swagger-drift canary per the regen-then-prune header in
     ``_wire_types.py``: if a future regen forgets the prune step,
-    cardinality jumps from 26 to the full graph and this assertion goes RED.
+    cardinality jumps from 28 to the full graph and this assertion goes RED.
     """
     assert set(get_type_hints(OutputPoint)) == set(_EXPECTED_OUTPUT_POINT_KEYS)
 
