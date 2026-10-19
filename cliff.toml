@@ -24,6 +24,9 @@ protect_breaking_commits = true
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
 commit_parsers = [
+  # GitHub's PR merge commits only wrap the commits they merge, which are
+  # already listed on their own.
+  { message = "^Merge (pull request|branch) ", skip = true },
   { message = "^feat", group = "<!-- 0 -->Features" },
   { message = "^fix", group = "<!-- 1 -->Bug fixes" },
   { message = "^perf", group = "<!-- 2 -->Performance" },
