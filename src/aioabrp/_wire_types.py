@@ -104,6 +104,8 @@ type Provider = Literal[
     "EXTERNAL_CALIBRATION",
     "RIVIAN_STREAM",
     "DERIVED",
+    "CARSCANNER",
+    "ABRP_OTA",
 ]
 
 
