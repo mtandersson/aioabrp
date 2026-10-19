@@ -36,6 +36,8 @@ class Metric(StrEnum):
     SPEED = "speed"
     SPEED_FACTOR = "speed_factor"
     CALIBRATED_CONFIDENCE = "calibrated_confidence"
+    BATTERY_TEMPERATURE_MIN = "battery_temperature_min"
+    BATTERY_TEMPERATURE_MAX = "battery_temperature_max"
 
 
 class ChargingState(StrEnum):
@@ -107,7 +109,8 @@ class MetricValue[T]:
     percent (soc/soh - frac surfaced x100), W (power/hvac_power), V, A
     (current), Wh (soe/battery_capacity/charging_energy_added), m
     (odometer/range/elevation), m/s (speed/calibrated_max_speed),
-    degrees (heading), °C (battery/cabin/external temperatures), Wh/km
+    degrees (heading), °C (battery incl. min/max cell, cabin and external
+    temperatures), Wh/km
     (calibrated_ref_cons), and dimensionless fractions (speed_factor,
     calibrated_confidence). ``time`` is the wire block's tz-aware
     timestamp or ``None``; ``provider`` is the clean upstream provider
@@ -154,6 +157,8 @@ class Telemetry:
     speed: MetricValue[float] | None = None
     speed_factor: MetricValue[float] | None = None
     calibrated_confidence: MetricValue[tuple[float, ...]] | None = None
+    battery_temperature_min: MetricValue[float] | None = None
+    battery_temperature_max: MetricValue[float] | None = None
 
     def items(self) -> Iterator[tuple[Metric, MetricValue[Any]]]:
         """Yield ``(Metric, MetricValue)`` for every present (non-None) field.

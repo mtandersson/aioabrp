@@ -9,7 +9,7 @@ library's surface before merging. Organised as subcommands:
                         none, every garage vehicle's typecode).
     snapshot            One-shot telemetry snapshot per vehicle.
     stream              Stream live telemetry to stdout until Ctrl+C
-                        (the full 26-metric surface).
+                        (the full 28-metric surface).
 
 Credentials come from flags, the environment, or a .env file (never stored in
 this script):
@@ -92,7 +92,7 @@ def _print_telemetry(vehicle_id: int, telemetry: Telemetry) -> None:
         wire_time = mv.time.isoformat() if mv.time else "-"
         provider = mv.provider or "-"
         print(
-            f"[{_stamp()}] vehicle={vehicle_id} {metric.value:<22} "
+            f"[{_stamp()}] vehicle={vehicle_id} {metric.value:<23} "
             f"= {_fmt_value(mv.value):<40} (time={wire_time} provider={provider})",
             flush=True,
         )

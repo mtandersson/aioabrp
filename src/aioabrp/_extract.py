@@ -20,8 +20,11 @@ Per-metric load-bearing notes (ported with the extractors):
   a post-recalibration overshoot (``frac > 1.0``) is meaningful drift
   downstream statistics are meant to capture, so flattening it would
   lose signal.
-* battery_temperature — °C with NO lower-bound filter: winter operation
-  (sub-zero pack temps) is a real wire shape, not a degenerate one.
+* battery_temperature / battery_temperature_min / battery_temperature_max
+  — °C with NO lower-bound filter: winter operation (sub-zero pack temps)
+  is a real wire shape, not a degenerate one. min / max are the lowest /
+  highest cell temperatures, surfaced as-is (no ordering check against
+  each other or the pack value).
   Distinct from any cabin or external temperature ABRP might surface in
   future fields.
 * odometer / range / elevation — native meters: a canonical,
@@ -86,6 +89,8 @@ WIRE_KEYS: dict[Metric, str] = {
     Metric.SPEED: "speed",
     Metric.SPEED_FACTOR: "speedFactor",
     Metric.CALIBRATED_CONFIDENCE: "calibratedConfidence",
+    Metric.BATTERY_TEMPERATURE_MIN: "batteryTemperatureMin",
+    Metric.BATTERY_TEMPERATURE_MAX: "batteryTemperatureMax",
 }
 
 # Numeric leaf key under each metric's wire block (units in the module
@@ -115,6 +120,8 @@ _NUMERIC_LEAF_KEYS: dict[Metric, str] = {
     # ``frac`` but it is deliberately NOT in _FRACTION_METRICS — it must
     # pass through unscaled, never surfaced x100.
     Metric.SPEED_FACTOR: "frac",
+    Metric.BATTERY_TEMPERATURE_MIN: "c",
+    Metric.BATTERY_TEMPERATURE_MAX: "c",
 }
 
 # Metrics whose wire leaf is a 0.0-1.0 fraction surfaced x100 (soh
