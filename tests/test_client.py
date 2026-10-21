@@ -48,7 +48,7 @@ from aioabrp.models import (
 
 API_KEY = "mock-partner-key"
 ACCESS_TOKEN = "mock-access-token"
-VEHICLE_ID = 941349991303
+VEHICLE_ID = 123456789012
 VEHICLE_NAME = "Rivian R2 2027 Standard Long Range"
 VEHICLE_MODEL = "rivian:r2:26:ncma91:rwd:w21"
 PAINT = "WHITE"
