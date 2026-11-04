@@ -18,7 +18,7 @@ performs that monkeypatch itself.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -293,7 +293,7 @@ async def stream_factory(
         *,
         api_key: str = "partner-key",
         auth: AbstractAuth | None = None,
-        vehicle_ids: list[int] | None = None,
+        vehicle_ids: Iterable[int] | None = None,
         name: str | None = None,
         backoff: Sequence[float] = (0.05, 0.1),
         watchdog_seconds: float = 5.0,
