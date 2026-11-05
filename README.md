@@ -271,6 +271,10 @@ latest `aioresponses` release is incompatible with aiohttp ≥ 3.14
 ([aioresponses#289](https://github.com/pnuckowski/aioresponses/issues/289));
 the published runtime dependency stays unpinned.
 
+CI also runs [gitleaks](https://github.com/gitleaks/gitleaks) on every PR and
+push and fails if a commit contains a credential. Keep real keys and tokens in
+the gitignored `.env`, never in source or tests.
+
 ### Live tests
 
 `tests/test_live.py` holds read-only tests against the real ABRP API: garage,
