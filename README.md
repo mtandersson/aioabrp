@@ -271,6 +271,23 @@ latest `aioresponses` release is incompatible with aiohttp ≥ 3.14
 ([aioresponses#289](https://github.com/pnuckowski/aioresponses/issues/289));
 the published runtime dependency stays unpinned.
 
+### Live tests
+
+`tests/test_live.py` holds read-only tests against the real ABRP API: garage,
+catalog, display metadata, snapshots, the stream and `set_vehicle_ids`. They
+are deselected by default (plain `uv run pytest` and CI never call the API)
+and run only when selected explicitly:
+
+```sh
+uv run pytest -m live
+```
+
+They read `ABRP_API_KEY` and `ABRP_ACCESS_TOKEN` from the environment or from
+a repo-root `.env` (see `.env.example`); a missing value fails the run. The
+access token is short-lived, so refresh it right before a run. The account
+needs at least one vehicle, and at least two for the `set_vehicle_ids` test
+(skipped otherwise). The suite takes about 30 seconds.
+
 ### Releases
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/);

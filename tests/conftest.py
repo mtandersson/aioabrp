@@ -232,19 +232,22 @@ class CallbackRecorder:
     def states(self) -> list[ConnectionState]:
         return [event.state for event in self.events]
 
-    async def wait_for_updates(self, count: int) -> None:
-        """Wait (bounded) until ``count`` on_update calls were recorded."""
-        async with asyncio.timeout(WAIT_TIMEOUT):
-            while len(self.updates) < count:
+    async def wait_until(
+        self, predicate: Callable[[], bool], within: float = WAIT_TIMEOUT
+    ) -> None:
+        """Wait (bounded) until ``predicate`` holds after a recorded callback."""
+        async with asyncio.timeout(within):
+            while not predicate():
                 self._changed.clear()
                 await self._changed.wait()
 
+    async def wait_for_updates(self, count: int) -> None:
+        """Wait (bounded) until ``count`` on_update calls were recorded."""
+        await self.wait_until(lambda: len(self.updates) >= count)
+
     async def wait_for_state(self, state: ConnectionState, count: int = 1) -> None:
         """Wait (bounded) until ``state`` has been observed ``count`` times."""
-        async with asyncio.timeout(WAIT_TIMEOUT):
-            while self.states.count(state) < count:
-                self._changed.clear()
-                await self._changed.wait()
+        await self.wait_until(lambda: self.states.count(state) >= count)
 
 
 @pytest.fixture
