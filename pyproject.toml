@@ -106,3 +106,6 @@ files = ["src", "tests"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Live tests hit the real ABRP API; they run only with an explicit `-m live`.
+addopts = ["-m", "not live", "--strict-markers"]
+markers = ["live: read-only tests against the real ABRP API (opt-in: -m live)"]

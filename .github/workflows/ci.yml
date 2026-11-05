@@ -34,3 +34,37 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+  secrets:
+    # Blocks commits that contain credentials (API keys, tokens, private
+    # keys). On a PR it scans the PR's commits; on push, the pushed range.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  required:
+    # The single required status check on main: passes only when every job
+    # above passed. Add new jobs to `needs` instead of editing the ruleset.
+    if: always()
+    needs: [ci, secrets]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done
