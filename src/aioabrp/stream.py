@@ -19,6 +19,9 @@ Contracts (consumer-facing):
   unilaterally closes idle streams at ~200 s and the stream reconnects
   with backoff. Every failed/ended connection attempt emits one
   ``DISCONNECTED`` event with a short reason string.
+* :meth:`TelemetryStream.set_vehicle_ids` changes the subscription of a
+  live stream; a changed set closes the connection and reconnects at once
+  (``DISCONNECTED`` with reason ``"vehicle set changed"``, no backoff).
 * ``AUTH_FAILED`` is terminal: the stream stops itself and the consumer
   decides whether/when to retry with fresh credentials.
 * A transient (non-``AbrpAuthError``) token-getter failure emits NO
@@ -38,7 +41,7 @@ one session — never share state.
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from http import HTTPStatus
 from typing import Any
@@ -70,6 +73,13 @@ _LOGGER = logging.getLogger(__name__)
 # ``aioabrp.stream._sleep`` to capture backoff delays deterministically.
 _sleep = asyncio.sleep
 
+VEHICLES_CHANGED_REASON = "vehicle set changed"
+
+
+def _normalize_ids(vehicle_ids: Iterable[int]) -> list[int]:
+    """Coerce to ``int`` and drop duplicates, keeping first-seen order."""
+    return list(dict.fromkeys(int(vehicle_id) for vehicle_id in vehicle_ids))
+
 
 def _summarize_exc(err: BaseException) -> str:
     """Short triage-friendly summary of an exception for connection events.
@@ -99,7 +109,7 @@ class TelemetryStream:
 
     Stall detection lives at this layer, not in the aiohttp request:
     each ``anext()`` on the SSE iterator is wrapped in
-    :func:`asyncio.wait_for` with a ``watchdog_seconds`` bound. A
+    :func:`asyncio.timeout` with a ``watchdog_seconds`` bound. A
     half-open TCP / NAT-rebind / modem-suspend that the kernel never
     sees a FIN for would otherwise park the consumer indefinitely
     (production stall shape — observed as a 16 h flatline). On timeout
@@ -118,7 +128,7 @@ class TelemetryStream:
         websession: ClientSession,
         api_key: str,
         auth: AbstractAuth,
-        vehicle_ids: list[int],
+        vehicle_ids: Iterable[int],
         on_update: Callable[[int, Telemetry], None],
         on_connection_change: Callable[[ConnectionEvent], None],
         *,
@@ -141,7 +151,11 @@ class TelemetryStream:
         self._websession = websession
         self._api_key = api_key
         self._auth = auth
-        self._vehicle_ids = list(vehicle_ids)
+        self._vehicle_ids: list[int] = _normalize_ids(vehicle_ids)
+        # Set by set_vehicle_ids(): wakes an idle stream, ends a connection.
+        self._ids_changed = asyncio.Event()
+        # Live watchdog timeout; set_vehicle_ids() fires it early.
+        self._watch: asyncio.Timeout | None = None
         self._on_update = on_update
         self._on_connection_change = on_connection_change
         self._name = name
@@ -167,6 +181,30 @@ class TelemetryStream:
         self._unknown_charging_states_seen: set[str] = set()
         self._unknown_driving_states_seen: set[str] = set()
 
+    def set_vehicle_ids(self, vehicle_ids: Iterable[int]) -> None:
+        """Change the subscribed vehicles of a (possibly running) stream.
+
+        Synchronous; safe at any time. Ids are de-duplicated (first
+        occurrence kept) and compared as a set: an unchanged set is a
+        no-op. On a change a live connection is closed at once and
+        re-opened with the new ``vehicleIds`` — no backoff step, one
+        ``DISCONNECTED`` event with reason ``"vehicle set changed"``.
+        A change during a backoff sleep takes effect when it ends. An
+        empty list is allowed: the stream idles, making no request.
+        Gate state of removed ids is dropped and their in-flight frames
+        are not delivered.
+        """
+        new_ids = _normalize_ids(vehicle_ids)
+        if set(new_ids) == set(self._vehicle_ids):
+            return
+        removed = set(self._vehicle_ids) - set(new_ids)
+        self._vehicle_ids = new_ids
+        for key in [k for k in self._last_times if k[0] in removed]:
+            del self._last_times[key]
+        self._ids_changed.set()
+        if self._watch is not None and not self._watch.expired():
+            self._watch.reschedule(0)
+
     async def start(self) -> None:
         """Start the background SSE consumer task.
 
@@ -191,7 +229,7 @@ class TelemetryStream:
         """Stop the stream: cancel the task and wait for it to finish.
 
         Cancel-based, never a graceful join — the task is typically
-        parked in a network read, the watchdog ``wait_for``, or the
+        parked in a network read, the watchdog timeout, or the
         backoff sleep. Idempotent and safe before :meth:`start`, after
         the ``AUTH_FAILED`` self-stop, and during the backoff sleep.
         ``_stopped`` is set BEFORE cancelling so the done-callback
@@ -273,7 +311,7 @@ class TelemetryStream:
         """Reconnect loop: token fetch, one connection attempt, backoff.
 
         Two cancellation paths are supported on ``stop()``: (a) naked
-        propagation — ``wait_for`` delivers ``CancelledError`` into the
+        propagation — the timeout block delivers ``CancelledError`` into the
         generator's frame, the ``finally`` cleanup releases it, and the
         exception propagates out of this coroutine; (b) masked — an
         iterator that catches ``CancelledError`` inside ``__anext__``
@@ -284,6 +322,12 @@ class TelemetryStream:
         """
         delay_idx = 0
         while True:
+            # No vehicles, no request: idle until set_vehicle_ids().
+            while not self._vehicle_ids:
+                self._ids_changed.clear()
+                await self._ids_changed.wait()
+            # A stale flag must not skip the backoff after a token failure.
+            self._ids_changed.clear()
             try:
                 token = await self._auth.async_get_access_token()
             except AbrpAuthError as err:
@@ -307,6 +351,9 @@ class TelemetryStream:
                     _summarize_exc(err),
                 )
             else:
+                if not self._vehicle_ids:
+                    # Emptied while the token was being fetched.
+                    continue
                 try:
                     reason, saw_frame = await self._connect_once(token)
                 except AbrpAuthError as err:
@@ -338,6 +385,10 @@ class TelemetryStream:
             if task is not None and task.cancelling():
                 return
 
+            # Changed during the connection: reconnect without backoff.
+            if self._ids_changed.is_set():
+                continue
+
             delay = self._backoff[min(delay_idx, len(self._backoff) - 1)]
             await _sleep(delay)
             delay_idx = min(delay_idx + 1, len(self._backoff) - 1)
@@ -360,15 +411,22 @@ class TelemetryStream:
         # replacement with an eager side effect, or a future refactor
         # that opens the response eagerly).
         agen: AsyncGenerator[dict[str, Any]] | None = None
+        # Ids are read lazily on the first anext, so this never goes stale.
+        self._ids_changed.clear()
         try:
             agen = self._open_stream(token)
             while True:
+                if self._ids_changed.is_set():
+                    disconnect_reason = VEHICLES_CHANGED_REASON
+                    break
                 try:
-                    frame = await asyncio.wait_for(
-                        anext(agen), timeout=self._watchdog_seconds
-                    )
+                    async with asyncio.timeout(self._watchdog_seconds) as watch:
+                        self._watch = watch
+                        frame = await anext(agen)
                 except StopAsyncIteration:
                     break
+                finally:
+                    self._watch = None
                 if not saw_frame:
                     # CONNECTED on the first FRAME, not on the HTTP
                     # 200: a connection that opens but never produces
@@ -382,12 +440,15 @@ class TelemetryStream:
                     self._connection_event(ConnectionState.CONNECTED)
                 self._handle_frame(frame)
         except TimeoutError:
-            disconnect_reason = f"watchdog_stall_{self._watchdog_seconds}s"
-            _LOGGER.warning(
-                "%sSSE stream stalled (no frames for %ss); forcing reconnect",
-                self._log_prefix,
-                self._watchdog_seconds,
-            )
+            if self._ids_changed.is_set():
+                disconnect_reason = VEHICLES_CHANGED_REASON
+            else:
+                disconnect_reason = f"watchdog_stall_{self._watchdog_seconds}s"
+                _LOGGER.warning(
+                    "%sSSE stream stalled (no frames for %ss); forcing reconnect",
+                    self._log_prefix,
+                    self._watchdog_seconds,
+                )
         except (AbrpApiError, ClientError) as err:
             disconnect_reason = _summarize_exc(err)
         finally:
@@ -468,6 +529,9 @@ class TelemetryStream:
     def _handle_frame(self, frame: dict[str, Any]) -> None:
         """Extract, gate, and dispatch one parsed wire frame."""
         vehicle_id: int = frame["vehicleId"]
+        if vehicle_id not in self._vehicle_ids:
+            # In flight for a vehicle removed by set_vehicle_ids().
+            return
         extracted = extract_metrics(
             frame,
             unknown_charging_states_seen=self._unknown_charging_states_seen,

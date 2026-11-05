@@ -203,6 +203,19 @@ Notes:
   stop was interrupted, not completed.
 - `start()` after `stop()` restarts the stream.
 
+### Changing vehicles at runtime
+
+`stream.set_vehicle_ids(ids)` is synchronous and safe to call at any time
+(before `start()`, connected, backing off, stopped). Duplicates are dropped
+(first occurrence kept). If the *set* is unchanged nothing happens; otherwise
+a live connection is closed promptly and re-opened with the new `vehicleIds`
+— no backoff step, no error. That close emits one `DISCONNECTED` event with
+reason `"vehicle set changed"`. A change during a backoff sleep takes effect
+when it ends. An empty list is allowed (also at
+construction): the stream idles without any HTTP request until ids are set.
+Gate state for removed vehicles is dropped, and frames still in flight for a
+removed vehicle are not delivered.
+
 ### Monotonicity gate
 
 Each stream keeps one piece of state: a per-`(vehicle_id, Metric)` map of
