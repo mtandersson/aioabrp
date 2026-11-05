@@ -27,12 +27,16 @@ commit_parsers = [
   # GitHub's PR merge commits only wrap the commits they merge, which are
   # already listed on their own.
   { message = "^Merge (pull request|branch) ", skip = true },
-  { message = "^feat", group = "<!-- 0 -->Features" },
-  { message = "^fix", group = "<!-- 1 -->Bug fixes" },
-  { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^docs?", group = "<!-- 3 -->Documentation" },
-  { message = "^refactor", group = "<!-- 4 -->Refactoring" },
-  { message = "^test", group = "<!-- 5 -->Testing" },
-  { message = "^(build|ci|chore)", group = "<!-- 6 -->Maintenance" },
-  { message = ".*", group = "<!-- 7 -->Other" },
+  # Breaking changes of any type (`type!:` or a BREAKING CHANGE footer).
+  { field = "breaking", pattern = "true", group = "<!-- 0 -->Breaking changes" },
+  { message = "^feat", group = "<!-- 1 -->Features" },
+  { message = "^fix", group = "<!-- 2 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 3 -->Performance" },
+  { message = "^docs?", group = "<!-- 4 -->Documentation" },
+  # Release notes are for library users: changes with no user-visible effect
+  # stay in the git history only (breaking ones are caught above). A build
+  # change that affects users (e.g. a runtime dependency) should be
+  # committed as fix/feat.
+  { message = "^(refactor|test|build|ci|chore|style)", skip = true },
+  { message = ".*", group = "<!-- 5 -->Other" },
 ]
