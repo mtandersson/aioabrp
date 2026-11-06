@@ -107,7 +107,8 @@ during the OAuth exchange; never treat the result as authenticated. A malformed
 token or a missing/empty `sub` raises `AbrpAuthError`.
 
 Distinct, similarly named properties live on the vehicle-model display metadata
-returned by `async_get_vehicle_model_display`. Its six fields mirror the wire
+returned by `async_get_vehicle_model_display` and carried on each garage
+vehicle as `AbrpVehicle.display`. Its six fields mirror the wire
 payload verbatim; two properties pre-assemble them into labels:
 
 ```python
@@ -124,6 +125,24 @@ own, pairing it with `manufacturer`.
 ## Consumer contracts
 
 These behaviors are pinned by the test suite; consumers may rely on them.
+
+### Garage
+
+`async_get_vehicles()` returns the caller's garage, shared vehicles included,
+in one request. The order is ABRP's (currently owned vehicles first, then
+shared ones, each by id).
+Each `AbrpVehicle` carries:
+
+* `vehicle_id` and `vehicle_model` (the typecode: a catalogue typecode or a
+  custom model id).
+* `name`: the owner's nickname, `None` when unset.
+* `display`: the `VehicleModelDisplay` ABRP shows for the vehicle's model, so
+  no `async_get_vehicle_model_display` call per vehicle is needed. `None` when
+  the typecode does not resolve.
+* `relation`: `VehicleRelation.OWNED` or `VehicleRelation.SHARED`; `None` for a
+  relation this version does not know.
+* `paint`: always `None`. The garage endpoint does not return it, and the field
+  is kept only for compatibility.
 
 ### Metrics and units
 

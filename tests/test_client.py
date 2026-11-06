@@ -3,13 +3,10 @@
 Endpoint mocks use aioresponses against a real ``aiohttp.ClientSession``.
 The wire surface under test:
 
-* ``POST /1/session/get_tlm`` — garage enumeration (v1 envelope)
+* ``GET /2/abrp/me/vehicles`` — garage, with display metadata (bare JSON)
 * ``GET /2/vehicle/_list`` — vehicle catalog (bare JSON)
 * ``GET /2/tlm/{vehicle_id}`` — one-shot telemetry (bare JSON -> typed)
 * ``GET /2/vehicle-model/by-typecode/{typecode}/display`` — display metadata
-
-Auth-vs-generic error routing on the v1 envelope uses the word-bounded
-keyword heuristic on the ``error`` text.
 """
 
 import logging
@@ -29,9 +26,8 @@ import aioabrp._clock as _clock
 from aioabrp.auth import AbstractAuth, StaticAuth
 from aioabrp.client import AbrpClient
 from aioabrp.const import (
-    API_BASE_V1,
     API_BASE_V2,
-    ENDPOINT_GET_TLM,
+    ENDPOINT_MY_VEHICLES,
     ENDPOINT_TLM,
     ENDPOINT_VEHICLE_LIST,
     ENDPOINT_VEHICLE_MODEL_DISPLAY,
@@ -44,6 +40,7 @@ from aioabrp.models import (
     Metric,
     Telemetry,
     VehicleModelDisplay,
+    VehicleRelation,
 )
 
 API_KEY = "mock-partner-key"
@@ -51,11 +48,10 @@ ACCESS_TOKEN = "mock-access-token"
 VEHICLE_ID = 123456789012
 VEHICLE_NAME = "Rivian R2 2027 Standard Long Range"
 VEHICLE_MODEL = "rivian:r2:26:ncma91:rwd:w21"
-PAINT = "WHITE"
 
 DISPLAY_TYPECODE = "rivian:r1s:22:large"
 
-VEHICLES_URL = f"{API_BASE_V1}/{ENDPOINT_GET_TLM}"
+VEHICLES_URL = f"{API_BASE_V2}/{ENDPOINT_MY_VEHICLES}?include=shared"
 CATALOG_URL = f"{API_BASE_V2}/{ENDPOINT_VEHICLE_LIST}"
 ONE_SHOT_URL = f"{API_BASE_V2}/{ENDPOINT_TLM}/{VEHICLE_ID}"
 
@@ -98,41 +94,17 @@ class RaisingAuth(AbstractAuth):
         raise self._exc
 
 
-def build_vehicle_record(
-    vehicle_id: int = VEHICLE_ID,
-    name: str | None = VEHICLE_NAME,
-    vehicle_model: str = VEHICLE_MODEL,
-    paint: str | None = PAINT,
-) -> dict[str, Any]:
-    """Build one ``result`` array entry as returned by /1/session/get_tlm.
-
-    A trimmed mirror of the live wire record: the identity fields the
-    parser consumes plus a few of the extraneous columns the real
-    endpoint emits, so the parser is exercised against realistic noise.
-    """
-    return {
-        "vehicle_id": vehicle_id,
-        "car_model": vehicle_model,
-        "name": name,
-        "paint": paint,
-        "tlm_type": None,
-        "always_log": False,
-        "is_connected": False,
-        "owner_id": 2755291,
+def build_vehicle_item(**overrides: Any) -> dict[str, Any]:
+    """Build one ``UserVehicleListItem`` as returned by /2/abrp/me/vehicles."""
+    item: dict[str, Any] = {
+        "id": VEHICLE_ID,
+        "name": VEHICLE_NAME,
+        "typecode": VEHICLE_MODEL,
+        "relation": "OWNED",
+        "model": {**build_display_record(), "isCustom": False},
     }
-
-
-def build_garage_response(
-    records: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Wrap ``records`` in the v1 envelope returned by /1/session/get_tlm."""
-    if records is None:
-        records = [build_vehicle_record()]
-    return {
-        "status": "ok",
-        "result": records,
-        "extra": {"settings_update_time": 0, "settings_version": 0},
-    }
+    item.update(overrides)
+    return item
 
 
 def build_catalog_record(**overrides: Any) -> dict[str, Any]:
@@ -196,33 +168,51 @@ async def _get_single_catalog_entry(
 # ---------- async_get_vehicles ------------------------------------------------
 
 
-async def test_get_vehicles_happy_path(
+async def test_get_vehicles_parses_owned_shared_and_missing_model(
     client: AbrpClient, mock_api: aioresponses
 ) -> None:
-    """Two vehicles parse in order; a null nickname is tolerated."""
-    records = [
-        build_vehicle_record(),
-        build_vehicle_record(vehicle_id=2, name=None, paint=None),
+    """Items parse in wire order with display and relation; paint is unset."""
+    custom_model = {
+        **build_display_record(title="My R1S"),
+        "isCustom": True,
+        "baseTypecode": DISPLAY_TYPECODE,
+    }
+    items = [
+        build_vehicle_item(),
+        build_vehicle_item(id=2, name="", relation="SHARED", model=custom_model),
+        build_vehicle_item(id=3, typecode="custom:unknown"),
     ]
-    mock_api.post(VEHICLES_URL, payload=build_garage_response(records))
+    del items[2]["model"]  # typecode did not resolve
+    mock_api.get(VEHICLES_URL, payload=items)
 
-    vehicles = await client.async_get_vehicles()
+    owned, shared, unresolved = await client.async_get_vehicles()
 
-    assert len(vehicles) == 2
-    first, second = vehicles
-    assert isinstance(first, AbrpVehicle)
-    assert first.vehicle_id == VEHICLE_ID
-    assert first.name == VEHICLE_NAME
-    assert first.vehicle_model == VEHICLE_MODEL
-    assert first.paint == PAINT
-    assert second.vehicle_id == 2
-    assert second.name is None
-    assert second.paint is None
+    assert owned == AbrpVehicle(
+        vehicle_id=VEHICLE_ID,
+        name=VEHICLE_NAME,
+        vehicle_model=VEHICLE_MODEL,
+        paint=None,
+        display=VehicleModelDisplay(
+            manufacturer="Rivian",
+            model="R1S",
+            years="2022-2023",
+            title="R1S Adventure",
+            start_year=2022,
+            end_year=2023,
+        ),
+        relation=VehicleRelation.OWNED,
+    )
+    assert shared.name is None  # "" means unset
+    assert shared.relation is VehicleRelation.SHARED
+    assert shared.display is not None
+    assert shared.display.title == "My R1S"
+    assert unresolved.vehicle_model == "custom:unknown"
+    assert unresolved.display is None
 
 
 async def test_get_vehicles_empty(client: AbrpClient, mock_api: aioresponses) -> None:
     """An empty garage returns an empty list (not None, not an exception)."""
-    mock_api.post(VEHICLES_URL, payload=build_garage_response([]))
+    mock_api.get(VEHICLES_URL, payload=[])
 
     assert await client.async_get_vehicles() == []
 
@@ -230,190 +220,87 @@ async def test_get_vehicles_empty(client: AbrpClient, mock_api: aioresponses) ->
 async def test_get_vehicles_request_shape(
     client: AbrpClient, mock_api: aioresponses
 ) -> None:
-    """Outgoing request: POST + ``APIKEY`` header + ``session_id`` body."""
-    mock_api.post(VEHICLES_URL, payload=build_garage_response())
+    """GET with shared vehicles included and both v2 auth headers."""
+    mock_api.get(VEHICLES_URL, payload=[])
 
     await client.async_get_vehicles()
 
-    calls = mock_api.requests[("POST", URL(VEHICLES_URL))]
+    calls = mock_api.requests[("GET", URL(VEHICLES_URL))]
     assert len(calls) == 1
     kwargs = calls[0].kwargs
-    assert kwargs["json"] == {"session_id": ACCESS_TOKEN}
-    assert kwargs["headers"] == {"Authorization": f"APIKEY {API_KEY}"}
+    assert kwargs["headers"] == {
+        "Accept": "application/json",
+        "X-API-KEY": API_KEY,
+        "X-ABRP-SESSION": ACCESS_TOKEN,
+    }
     assert kwargs["timeout"] == aiohttp.ClientTimeout(total=30)
 
 
-@pytest.mark.parametrize(
-    "error_text",
-    [
-        pytest.param("session expired", id="session_and_expired"),
-        pytest.param("invalid session", id="invalid_and_session"),
-        pytest.param("Authentication failed", id="auth"),
-        pytest.param("Token expired", id="token_and_expired"),
-        pytest.param("session_id invalid", id="session_id_underscore"),
-        pytest.param("auth_required", id="auth_required_underscore"),
-        pytest.param("authorization failed", id="authorization"),
-        pytest.param("invalid_credentials", id="invalid_credentials"),
-    ],
-)
-async def test_get_vehicles_envelope_auth_error(
-    client: AbrpClient, mock_api: aioresponses, error_text: str
-) -> None:
-    """``status:error`` with auth-heuristic text raises AbrpAuthError."""
-    mock_api.post(VEHICLES_URL, payload={"status": "error", "error": error_text})
-
-    with pytest.raises(AbrpAuthError):
-        await client.async_get_vehicles()
-
-
-@pytest.mark.parametrize(
-    "error_text",
-    [
-        pytest.param("Backend overloaded", id="backend"),
-        pytest.param("Rate limit reached", id="rate_limit"),
-        pytest.param("Internal failure", id="internal"),
-        pytest.param("invalid vehicle_model", id="invalid_other_word"),
-    ],
-)
-async def test_get_vehicles_envelope_api_error(
-    client: AbrpClient, mock_api: aioresponses, error_text: str
-) -> None:
-    """``status:error`` without auth-heuristic text raises AbrpApiError."""
-    mock_api.post(VEHICLES_URL, payload={"status": "error", "error": error_text})
-
-    with pytest.raises(AbrpApiError):
-        await client.async_get_vehicles()
-
-
-@pytest.mark.parametrize(
-    "status",
-    [
-        pytest.param(HTTPStatus.UNAUTHORIZED, id="401"),
-        pytest.param(HTTPStatus.FORBIDDEN, id="403"),
-    ],
-)
-async def test_get_vehicles_http_auth_failure(
-    client: AbrpClient, mock_api: aioresponses, status: HTTPStatus
-) -> None:
-    """A 401/403 from the garage endpoint raises AbrpAuthError."""
-    mock_api.post(VEHICLES_URL, status=status)
-
-    with pytest.raises(AbrpAuthError):
-        await client.async_get_vehicles()
-
-
-@pytest.mark.parametrize(
-    "mock_kwargs",
-    [
-        pytest.param({"status": HTTPStatus.INTERNAL_SERVER_ERROR}, id="500"),
-        pytest.param({"status": HTTPStatus.BAD_GATEWAY}, id="502"),
-        pytest.param({"status": HTTPStatus.SERVICE_UNAVAILABLE}, id="503"),
-        pytest.param({"exception": aiohttp.ClientError("boom")}, id="client_error"),
-    ],
-)
-async def test_get_vehicles_transport_failure(
-    client: AbrpClient, mock_api: aioresponses, mock_kwargs: dict[str, Any]
-) -> None:
-    """5xx HTTP and ClientError both surface as AbrpApiError."""
-    mock_api.post(VEHICLES_URL, **mock_kwargs)
-
-    with pytest.raises(AbrpApiError):
-        await client.async_get_vehicles()
-
-
-@pytest.mark.parametrize(
-    "mock_kwargs",
-    [
-        pytest.param({"body": "null"}, id="null"),
-        pytest.param({"payload": []}, id="empty_list"),
-        pytest.param(
-            {"payload": [build_vehicle_record(vehicle_id=1)]}, id="list_of_dicts"
-        ),
-        pytest.param({"payload": "just a string"}, id="string"),
-        pytest.param({"payload": 42}, id="integer"),
-    ],
-)
-async def test_get_vehicles_rejects_non_dict_payload(
-    client: AbrpClient, mock_api: aioresponses, mock_kwargs: dict[str, Any]
-) -> None:
-    """A JSON-valid non-dict garage body raises AbrpApiError, not AttributeError."""
-    mock_api.post(VEHICLES_URL, **mock_kwargs)
-
-    with pytest.raises(AbrpApiError):
-        await client.async_get_vehicles()
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        pytest.param({"status": "ok"}, id="missing_result_key"),
-        pytest.param({"status": "ok", "result": "oops"}, id="result_is_str"),
-        pytest.param({"status": "ok", "result": None}, id="result_is_null"),
-        pytest.param({"status": "ok", "result": {"x": 1}}, id="result_is_dict"),
-    ],
-)
-async def test_get_vehicles_malformed_success_envelope(
-    client: AbrpClient, mock_api: aioresponses, payload: dict[str, Any]
-) -> None:
-    """``status:ok`` with missing/non-list ``result`` raises AbrpApiError."""
-    mock_api.post(VEHICLES_URL, payload=payload)
-
-    with pytest.raises(AbrpApiError):
-        await client.async_get_vehicles()
-
-
-@pytest.mark.parametrize(
-    "malformed_body",
-    [
-        pytest.param("<html><body>502 Bad Gateway</body></html>", id="html"),
-        pytest.param('{"result": ', id="truncated_json"),
-    ],
-)
-async def test_get_vehicles_malformed_json_raises_api_error(
-    client: AbrpClient, mock_api: aioresponses, malformed_body: str
-) -> None:
-    """Malformed JSON garage body wraps as AbrpApiError with ValueError cause."""
-    mock_api.post(VEHICLES_URL, status=200, body=malformed_body)
-
-    with pytest.raises(AbrpApiError) as excinfo:
-        await client.async_get_vehicles()
-
-    assert isinstance(excinfo.value.__cause__, ValueError)
-
-
-async def test_get_vehicles_empty_body_raises_api_error(
+async def test_get_vehicles_degrades_unknown_relation_and_bad_model(
     client: AbrpClient, mock_api: aioresponses
 ) -> None:
-    """A truncated/empty 200 body raises AbrpApiError.
+    """Optional enrichment never fails the garage: it degrades to None."""
+    items = [
+        build_vehicle_item(relation="BORROWED", model={"title": "no manufacturer"}),
+        build_vehicle_item(id=2, model=None),
+    ]
+    mock_api.get(VEHICLES_URL, payload=items)
 
-    aiohttp's ``response.json()`` short-circuits an empty body to
-    ``None`` (no ``JSONDecodeError``), so this lands on the non-dict
-    shape guard rather than the malformed-JSON wrap — either way the
-    public boundary type is AbrpApiError.
-    """
-    mock_api.post(VEHICLES_URL, status=200, body="")
+    first, second = await client.async_get_vehicles()
 
-    with pytest.raises(AbrpApiError):
+    assert (first.relation, first.display) == (None, None)
+    assert first.vehicle_model == VEHICLE_MODEL
+    assert second.display is None
+
+
+@pytest.mark.parametrize(
+    ("mock_kwargs", "error"),
+    [
+        pytest.param({"status": HTTPStatus.UNAUTHORIZED}, AbrpAuthError, id="401"),
+        pytest.param({"status": HTTPStatus.FORBIDDEN}, AbrpAuthError, id="403"),
+        pytest.param(
+            {"status": HTTPStatus.INTERNAL_SERVER_ERROR}, AbrpApiError, id="500"
+        ),
+        pytest.param(
+            {"exception": aiohttp.ClientError("boom")}, AbrpApiError, id="client_error"
+        ),
+        pytest.param({"body": "<html>502</html>"}, AbrpApiError, id="not_json"),
+        pytest.param({"body": "null"}, AbrpApiError, id="null"),
+        pytest.param({"payload": {"result": []}}, AbrpApiError, id="dict"),
+    ],
+)
+async def test_get_vehicles_failures(
+    client: AbrpClient,
+    mock_api: aioresponses,
+    mock_kwargs: dict[str, Any],
+    error: type[Exception],
+) -> None:
+    """401/403 raise AbrpAuthError; other HTTP, transport, shape errors API."""
+    mock_api.get(VEHICLES_URL, **mock_kwargs)
+
+    with pytest.raises(error):
         await client.async_get_vehicles()
 
 
 @pytest.mark.parametrize(
-    "record",
+    "item",
     [
-        pytest.param({"name": "no ids"}, id="missing_vehicle_id"),
-        pytest.param({"vehicle_id": None, "car_model": "x"}, id="vehicle_id_null"),
-        pytest.param(
-            {"vehicle_id": "not-an-int", "car_model": "x"}, id="vehicle_id_str"
-        ),
-        pytest.param({"vehicle_id": 1}, id="missing_car_model"),
-        pytest.param(42, id="record_non_dict"),
+        pytest.param({"name": "no id", "typecode": "x"}, id="missing_id"),
+        pytest.param({"id": None, "typecode": "x"}, id="id_null"),
+        pytest.param({"id": "42", "typecode": "x"}, id="id_str"),
+        pytest.param({"id": 1.5, "typecode": "x"}, id="id_float"),
+        pytest.param({"id": True, "typecode": "x"}, id="id_bool"),
+        pytest.param({"id": 1}, id="missing_typecode"),
+        pytest.param({"id": 1, "typecode": None}, id="typecode_null"),
+        pytest.param({"id": 1, "typecode": ""}, id="typecode_empty"),
+        pytest.param(42, id="item_non_dict"),
     ],
 )
-async def test_get_vehicles_malformed_record(
-    client: AbrpClient, mock_api: aioresponses, record: Any
+async def test_get_vehicles_malformed_item(
+    client: AbrpClient, mock_api: aioresponses, item: Any
 ) -> None:
-    """A malformed ``result`` record surfaces as AbrpApiError."""
-    mock_api.post(VEHICLES_URL, payload=build_garage_response([record]))
+    """A malformed vehicle item surfaces as AbrpApiError."""
+    mock_api.get(VEHICLES_URL, payload=[item])
 
     with pytest.raises(AbrpApiError):
         await client.async_get_vehicles()

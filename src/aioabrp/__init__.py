@@ -19,6 +19,7 @@ from .models import (
     Region,
     Telemetry,
     VehicleModelDisplay,
+    VehicleRelation,
 )
 from .stream import TelemetryStream
 
@@ -51,6 +52,7 @@ __all__ = [
     "Telemetry",
     "TelemetryStream",
     "VehicleModelDisplay",
+    "VehicleRelation",
     "__version__",
     "parse_unverified_identity",
 ]

@@ -62,7 +62,7 @@ AUTH_HINT = (
 )
 LIVE_TESTS = {
     "test_catalog_is_not_empty",
-    "test_display_for_every_garage_typecode",
+    "test_garage_display_matches_the_display_endpoint",
     "test_snapshot_for_every_vehicle",
     "test_stream_whole_garage_connects_and_updates",
     "test_set_vehicle_ids_grow_noop_empty_narrow",
@@ -209,13 +209,19 @@ async def test_catalog_is_not_empty(client: AbrpClient) -> None:
 
 
 @live
-async def test_display_for_every_garage_typecode(
+async def test_garage_display_matches_the_display_endpoint(
     client: AbrpClient, garage: list[AbrpVehicle]
 ) -> None:
+    for index, vehicle in enumerate(garage):
+        _check(vehicle.relation is not None, f"garage vehicle #{index}: no relation")
     for typecode in sorted({vehicle.vehicle_model for vehicle in garage}):
         with api_errors(f"display for typecode {typecode!r}"):
             display = await client.async_get_vehicle_model_display(typecode)
         _check(display.title, f"empty display title for typecode {typecode!r}")
+        _check(
+            all(v.display == display for v in garage if v.vehicle_model == typecode),
+            f"garage display differs from the display endpoint for {typecode!r}",
+        )
 
 
 @live

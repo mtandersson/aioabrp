@@ -1,10 +1,11 @@
 """API constants for the ABRP / Iternio telemetry API."""
 
-API_BASE_V1 = "https://api.iternio.com/1"
 # Probe-confirmed v2 base is ``/2`` (not ``/v2``); the swagger ``servers.url``
 # agrees.
 API_BASE_V2 = "https://api.iternio.com/2"
-ENDPOINT_GET_TLM = "session/get_tlm"
+# The caller's garage (owned, plus shared with ``include=shared``), each
+# vehicle with its display metadata.
+ENDPOINT_MY_VEHICLES = "abrp/me/vehicles"
 ENDPOINT_TLM = "tlm"
 ENDPOINT_VEHICLE_LIST = "vehicle/_list"
 # Path prefix for the per-typecode vehicle-model endpoints; the typecode and

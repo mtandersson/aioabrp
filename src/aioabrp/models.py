@@ -59,6 +59,18 @@ class DrivingState(StrEnum):
     DRIVE = "drive"
 
 
+class VehicleRelation(StrEnum):
+    """How the caller relates to a garage vehicle.
+
+    Member names mirror the wire values (``OWNED``, ``SHARED``); the values
+    are lowercase like the other enums, so ``VehicleRelation["OWNED"]``
+    works and ``VehicleRelation("OWNED")`` does not.
+    """
+
+    OWNED = "owned"
+    SHARED = "shared"
+
+
 class Region(StrEnum):
     """Coarse world region of the vehicle position (closed enum, mirrors wire)."""
 
@@ -201,29 +213,14 @@ class ConnectionEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class AbrpVehicle:
-    """One vehicle from the v1 garage enumeration (raw wire fields only).
-
-    All fields come from ``POST /1/session/get_tlm``. ``name`` stays
-    nullable defensively (some live-API records have no nickname).
-    """
-
-    vehicle_id: int
-    name: str | None
-    vehicle_model: str
-    paint: str | None
-
-
-@dataclass(frozen=True, slots=True)
 class CatalogEntry:
     """One catalog vehicle template from ``GET /2/vehicle/_list``.
 
     The v2 catalog endpoint returns ~1100 vehicle templates indexed by
     ``typecode``. Each entry carries nameplate metadata (maker, model, title,
-    year window, battery capacity) that the v1 garage endpoint does not
-    expose. Optional fields normalise at the parse boundary so empty strings
-    and wrong types collapse to ``None`` instead of poisoning downstream
-    consumers.
+    year window, battery capacity). Optional fields normalise at the parse
+    boundary so empty strings and wrong types collapse to ``None`` instead
+    of poisoning downstream consumers.
     """
 
     typecode: str
@@ -294,3 +291,28 @@ class VehicleModelDisplay:
         :attr:`AbrpIdentity.display_name` field.
         """
         return f"{self.manufacturer} {self.model_name}"
+
+
+@dataclass(frozen=True, slots=True)
+class AbrpVehicle:
+    """One vehicle in the caller's garage.
+
+    From ``GET /2/abrp/me/vehicles?include=shared``, in ABRP's order
+    (currently owned vehicles first, then shared ones, each by id).
+
+    * ``name`` is the owner's nickname, ``None`` when unset.
+    * ``vehicle_model`` is the typecode: a catalogue typecode or a custom
+      model id.
+    * ``paint`` is always ``None``: the garage endpoint does not return it.
+      The field is kept for compatibility.
+    * ``display`` is what ABRP shows for the vehicle's model, ``None`` when
+      the typecode does not resolve (or the record is malformed).
+    * ``relation`` is ``None`` for a relation this version does not know.
+    """
+
+    vehicle_id: int
+    name: str | None
+    vehicle_model: str
+    paint: str | None = None
+    display: VehicleModelDisplay | None = None
+    relation: VehicleRelation | None = None
