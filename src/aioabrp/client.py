@@ -1,23 +1,17 @@
-"""Request/response client for the ABRP v1/v2 endpoints.
+"""Request/response client for the ABRP v2 endpoints.
 
 Wire surface:
 
-* ``POST /1/session/get_tlm`` — garage enumeration.
-  Header ``Authorization: APIKEY <api_key>``, body
-  ``{"session_id": "<access token>"}``, response envelope
-  ``{"status": "ok"|"error", "result"|"error": ...}``. The v1 endpoint
-  returns ``200 OK`` for both successful calls and most business-level
-  failures; auth and validation failures arrive as
-  ``200 {"status": "error", "error": "<text>"}``. The auth-vs-generic
-  split is a text-matching heuristic on the error string until ABRP
-  exposes machine-readable error codes.
+* ``GET /2/abrp/me/vehicles?include=shared`` — the caller's garage: owned
+  vehicles, then vehicles shared with the caller, each with the display
+  metadata of its model (bare JSON array).
 * ``GET /2/vehicle/_list`` — vehicle catalog (bare JSON, no envelope).
 * ``GET /2/tlm/{vehicle_id}`` — one-shot telemetry snapshot (bare JSON),
   extracted into the library's typed event shape.
 * ``GET /2/vehicle-model/by-typecode/{typecode}/display`` — per-typecode
   display metadata (bare JSON, no envelope).
 
-The v2 endpoints split auth across two headers: the static partner key
+All endpoints split auth across two headers: the static partner key
 in ``X-API-KEY`` and the per-user session token in ``X-ABRP-SESSION``.
 
 Failure containment: every method fetches the access token via the
@@ -29,7 +23,6 @@ propagates to the caller untouched instead of being laundered into
 :class:`~aioabrp.exceptions.AbrpApiError`.
 """
 
-import re
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
@@ -46,9 +39,8 @@ from ._clock import clamp_future_times
 from ._extract import extract_metrics
 from .auth import AbstractAuth
 from .const import (
-    API_BASE_V1,
     API_BASE_V2,
-    ENDPOINT_GET_TLM,
+    ENDPOINT_MY_VEHICLES,
     ENDPOINT_TLM,
     ENDPOINT_VEHICLE_LIST,
     ENDPOINT_VEHICLE_MODEL_DISPLAY,
@@ -57,32 +49,23 @@ from .const import (
     ONE_SHOT_TIMEOUT_SECONDS,
 )
 from .exceptions import AbrpApiError, AbrpAuthError
-from .models import AbrpVehicle, CatalogEntry, Telemetry, VehicleModelDisplay
-
-# Heuristic match against the v1 envelope ``error`` text. The keywords are
-# word-bounded to avoid matching unrelated business errors that happen to
-# contain a substring (e.g. "invalid vehicle_model" matches a bare "invalid").
-# Compound forms like ``session_id`` / ``auth_required`` are their own
-# alternatives because the ``_`` is a regex word character and would block
-# the shorter ``\bsession\b`` / ``\bauth\b`` boundary match.
-_AUTH_ERROR_RE = re.compile(
-    r"\b(?:"
-    r"session|session_id|token|expired|unauthorized"
-    r"|authentication|authorization|auth_required|auth_failed"
-    r"|invalid_credentials"
-    r")\b",
-    re.IGNORECASE,
+from .models import (
+    AbrpVehicle,
+    CatalogEntry,
+    Telemetry,
+    VehicleModelDisplay,
+    VehicleRelation,
 )
+
+_RELATIONS = {relation.name: relation for relation in VehicleRelation}
 
 
 class AbrpClient:
-    """Stateless async client for the ABRP v1 garage + v2 catalog/telemetry APIs.
+    """Stateless async client for the ABRP v2 garage, catalog and telemetry APIs.
 
-    ``api_key`` is the static Iternio partner key (used in v1's
-    ``Authorization: APIKEY <key>`` header and in v2's ``X-API-KEY``
-    header). The per-user access token is fetched fresh from ``auth`` on
-    every call — the v1 endpoint accepts it in the request body as
-    ``session_id``; the v2 endpoints expect it in ``X-ABRP-SESSION``.
+    ``api_key`` is the static Iternio partner key, sent in ``X-API-KEY``.
+    The per-user access token is fetched fresh from ``auth`` on every call
+    and sent in ``X-ABRP-SESSION``.
 
     The only instance state is the dedup set for the
     unrecognized-chargingState warning — one per client instance, never
@@ -103,61 +86,29 @@ class AbrpClient:
         self._unknown_driving_states_seen: set[str] = set()
 
     async def async_get_vehicles(self) -> list[AbrpVehicle]:
-        """Return the authenticated user's garage.
+        """Return the caller's garage, shared vehicles included.
+
+        One request returns every vehicle with the display metadata of its
+        model, so no per-typecode display lookup is needed. Vehicles come
+        in ABRP's order (currently owned first, then shared, each by id).
 
         Raises:
-            AbrpAuthError: HTTP 401/403, or 200 envelope with auth-flavoured
-                ``error`` text (or, untouched, from the token getter).
-            AbrpApiError: any other HTTP/transport/parse failure, or 200
-                envelope with non-auth ``error`` text.
+            AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
+                untouched, from the token getter.
+            AbrpApiError: any other HTTP, transport, timeout, parse, or
+                malformed-item failure.
 
         """
-        token = await self._auth.async_get_access_token()
-        url = f"{API_BASE_V1}/{ENDPOINT_GET_TLM}"
-        headers = {"Authorization": f"APIKEY {self._api_key}"}
-        body = {"session_id": token}
-        try:
-            # Explicit budget deliberately diverges from the HA source — a
-            # standalone lib can't assume the consumer session's default.
-            async with self._websession.post(
-                url,
-                headers=headers,
-                json=body,
-                timeout=ClientTimeout(total=ONE_SHOT_TIMEOUT_SECONDS),
-            ) as response:
-                if response.status in (
-                    HTTPStatus.UNAUTHORIZED,
-                    HTTPStatus.FORBIDDEN,
-                ):
-                    raise AbrpAuthError(f"HTTP {response.status}")
-                # 401/403 only; other 4xx → AbrpApiError. Revisit if ABRP
-                # starts returning auth-flavoured 4xx with structured bodies
-                # (current v1 surfaces auth failures as 200 + status:"error").
-                if response.status >= HTTPStatus.BAD_REQUEST:
-                    raise AbrpApiError(f"HTTP {response.status}")
-                try:
-                    payload: Any = await response.json()
-                except ValueError as err:
-                    raise AbrpApiError(
-                        f"malformed JSON in garage response: {err}"
-                    ) from err
-        except (ClientError, TimeoutError) as err:
-            raise AbrpApiError(str(err)) from err
-
-        if not isinstance(payload, dict):
+        payload = await self._get_v2(
+            f"{API_BASE_V2}/{ENDPOINT_MY_VEHICLES}",
+            what="garage",
+            params={"include": "shared"},
+        )
+        if not isinstance(payload, list):
             raise AbrpApiError(
                 f"unexpected garage payload shape: {type(payload).__name__}"
             )
-        if payload.get("status") != "ok":
-            error_text = str(payload.get("error", "unknown"))
-            if _AUTH_ERROR_RE.search(error_text):
-                raise AbrpAuthError(error_text)
-            raise AbrpApiError(error_text)
-
-        records = payload.get("result")
-        if not isinstance(records, list):
-            raise AbrpApiError("missing or malformed 'result' in success response")
-        return [_parse_vehicle(record) for record in records]
+        return [_parse_vehicle(item) for item in payload]
 
     async def async_get_catalog(self) -> dict[str, CatalogEntry]:
         """Fetch the v2 vehicle catalog from ``GET /2/vehicle/_list``.
@@ -260,14 +211,25 @@ class AbrpClient:
         return _parse_vehicle_model_display(payload)
 
     async def _get_v2_json(self, url: str, *, what: str) -> dict[str, Any]:
-        """GET a v2 endpoint and return its bare-JSON dict payload.
+        """GET a v2 endpoint whose payload must be a JSON object."""
+        payload = await self._get_v2(url, what=what)
+        if not isinstance(payload, dict):
+            raise AbrpApiError(
+                f"unexpected {what} payload shape: {type(payload).__name__}"
+            )
+        return payload
+
+    async def _get_v2(
+        self, url: str, *, what: str, params: Mapping[str, str] | None = None
+    ) -> Any:
+        """GET a v2 endpoint and return its decoded JSON payload.
 
         Shared request ladder for the dual-header v2 endpoints: 401/403
         raises :class:`AbrpAuthError`; any other non-2xx, transport,
-        timeout, parse, or non-dict-shape failure raises
-        :class:`AbrpApiError` (``what`` names the endpoint in messages).
-        The token fetch stays OUTSIDE the ``(ClientError, TimeoutError)``
-        band so getter exceptions propagate to the caller untouched.
+        timeout, or parse failure raises :class:`AbrpApiError` (``what``
+        names the endpoint in messages). The token fetch stays OUTSIDE the
+        ``(ClientError, TimeoutError)`` band so getter exceptions propagate
+        to the caller untouched.
         """
         token = await self._auth.async_get_access_token()
         headers = {
@@ -279,6 +241,7 @@ class AbrpClient:
             async with self._websession.get(
                 url,
                 headers=headers,
+                params=params,
                 timeout=ClientTimeout(total=ONE_SHOT_TIMEOUT_SECONDS),
             ) as response:
                 if response.status in (
@@ -301,35 +264,46 @@ class AbrpClient:
             # boundary keeps the caller's ``(AbrpAuthError, AbrpApiError)``
             # handling engaged when the endpoint hangs past the budget.
             raise AbrpApiError(str(err)) from err
-
-        if not isinstance(payload, dict):
-            raise AbrpApiError(
-                f"unexpected {what} payload shape: {type(payload).__name__}"
-            )
         return payload
 
 
-def _parse_vehicle(record: dict[str, Any]) -> AbrpVehicle:
-    """Parse one ``result`` array entry into an :class:`AbrpVehicle`.
+def _parse_vehicle(item: Any) -> AbrpVehicle:
+    """Parse one ``UserVehicleListItem`` into an :class:`AbrpVehicle`.
 
-    Only the v1 identity fields are surfaced (raw wire fields; any
-    catalog enrichment or display policy is the consumer's concern).
-    ``name`` stays nullable defensively — some live-API records carry no
-    nickname.
+    ``id`` (an integer) and ``typecode`` (a non-empty string) are required:
+    a missing or malformed one raises :class:`AbrpApiError`. ``name`` maps
+    ``""`` (unset) and non-strings to ``None``. The
+    optional enrichment never fails the garage: an unknown ``relation`` or
+    an absent or malformed ``model`` becomes ``None``. Extra model fields
+    (``isCustom``, ``baseTypecode``) are ignored; ``display`` is what ABRP
+    shows either way.
     """
     try:
-        name = record.get("name")
-        paint = record.get("paint")
-        return AbrpVehicle(
-            vehicle_id=int(record["vehicle_id"]),
-            name=str(name) if name is not None else None,
-            vehicle_model=str(record["car_model"]),
-            paint=str(paint) if paint is not None else None,
-        )
-    # AttributeError covers non-dict records (``record.get`` on a scalar) —
-    # deliberate divergence from the HA source, which leaks that shape.
+        vehicle_id = item["id"]
+        if isinstance(vehicle_id, bool) or not isinstance(vehicle_id, int):
+            raise TypeError(f"id must be an integer, got {vehicle_id!r}")
+        typecode = item["typecode"]
+        if not isinstance(typecode, str) or not typecode:
+            raise TypeError(f"typecode must be a non-empty string, got {typecode!r}")
+        name = item.get("name")
+        relation = item.get("relation")
+        model = item.get("model")
+    # AttributeError covers non-dict items (``item.get`` on a scalar).
     except (AttributeError, KeyError, TypeError, ValueError) as err:
-        raise AbrpApiError(f"malformed vehicle record: {err}") from err
+        raise AbrpApiError(f"malformed vehicle item: {err}") from err
+    display: VehicleModelDisplay | None = None
+    if isinstance(model, Mapping):
+        try:
+            display = _parse_vehicle_model_display(model)
+        except AbrpApiError:
+            display = None
+    return AbrpVehicle(
+        vehicle_id=vehicle_id,
+        name=_str_or_none(name),
+        vehicle_model=typecode,
+        display=display,
+        relation=_RELATIONS.get(relation) if isinstance(relation, str) else None,
+    )
 
 
 def _str_or_none(value: Any) -> str | None:

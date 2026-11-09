@@ -131,7 +131,9 @@ async def _print_garage(client: AbrpClient) -> list[int]:
     for v in garage:
         print(
             f"[{_stamp()}] vehicle {v.vehicle_id}: "
-            f"{v.name or '(no name)'} [{v.vehicle_model}]",
+            f"{v.name or '(no name)'} [{v.vehicle_model}] "
+            f"{v.relation or '?'}: "
+            f"{v.display.display_name if v.display else '(no display)'}",
             flush=True,
         )
     return [v.vehicle_id for v in garage]
