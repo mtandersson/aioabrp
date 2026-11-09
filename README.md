@@ -357,16 +357,19 @@ access token is short-lived, so refresh it right before a run. The account
 needs at least one vehicle, and at least two for the `set_vehicle_ids` test
 (skipped otherwise). The suite takes about 30 seconds.
 
-One more test writes to a real vehicle, so `-m live` never selects it:
+Two more tests send telemetry, so `-m live` never selects them:
 
 ```sh
 ABRP_WRITE_VEHICLE_ID=<vehicle id> uv run pytest -m live_write
 ```
 
-It reads that vehicle's current state of charge and sends the same value
+One reads that vehicle's current state of charge and sends the same value
 back, so the vehicle's data does not change (it is skipped when there is no
-current SoC). `ABRP_WRITE_VEHICLE_ID` can also live in `.env`; the token must
-be allowed to write telemetry.
+current SoC). The vehicle must be in the token's garage. The other needs
+no vehicle id: it sends to a vehicle outside the garage and expects
+`AbrpForbiddenError`; ABRP refuses it, so nothing is written.
+`ABRP_WRITE_VEHICLE_ID` can also live in `.env`; the token must be allowed
+to write telemetry.
 
 ### Releases
 
