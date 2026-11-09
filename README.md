@@ -377,7 +377,7 @@ To cut a release, a maintainer runs the **Release** workflow manually
 (`workflow_dispatch`, from `main`). It runs the quality gate, then derives the
 next version from the Conventional Commits since the last tag with
 [git-cliff](https://git-cliff.org/) (`feat` → minor, `fix` → patch,
-breaking → major) — or uses the optional `version` input (`X.Y.Z`) to force a
+breaking → major from 1.0 on, minor before it) — or uses the optional `version` input (`X.Y.Z`) to force a
 specific version; leave it blank to auto-derive. The workflow tags `vX.Y.Z`,
 builds the sdist + wheel (hatch-vcs reads the version from the tag), publishes
 to PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
