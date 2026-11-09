@@ -325,3 +325,15 @@ async def stream_factory(
 
     for stream in created:
         await stream.stop()
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Deselect live_write tests unless run with exactly ``-m live_write``."""
+    if config.option.markexpr.strip() == "live_write":
+        return
+    writes = [item for item in items if item.get_closest_marker("live_write")]
+    if writes:
+        config.hook.pytest_deselected(items=writes)
+        items[:] = [item for item in items if item not in writes]

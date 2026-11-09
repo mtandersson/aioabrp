@@ -7,11 +7,16 @@ The wire surface under test:
 * ``GET /2/vehicle/_list`` — vehicle catalog (bare JSON)
 * ``GET /2/tlm/{vehicle_id}`` — one-shot telemetry (bare JSON -> typed)
 * ``GET /2/vehicle-model/by-typecode/{typecode}/display`` — display metadata
+* ``POST /2/app/tlm/{vehicle_id}`` — send one telemetry point
 """
 
+import copy
+import json
 import logging
+import math
+import pickle
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from http import HTTPStatus
 from typing import Any
 from unittest.mock import Mock
@@ -27,18 +32,27 @@ from aioabrp.auth import AbstractAuth, StaticAuth
 from aioabrp.client import AbrpClient
 from aioabrp.const import (
     API_BASE_V2,
+    ENDPOINT_APP_TLM,
     ENDPOINT_MY_VEHICLES,
     ENDPOINT_TLM,
     ENDPOINT_VEHICLE_LIST,
     ENDPOINT_VEHICLE_MODEL_DISPLAY,
 )
-from aioabrp.exceptions import AbrpApiError, AbrpAuthError
+from aioabrp.exceptions import (
+    AbrpApiError,
+    AbrpAuthError,
+    AbrpForbiddenError,
+    AbrpScopeError,
+)
 from aioabrp.models import (
     AbrpVehicle,
     ChargingState,
+    DrivingState,
     Location,
     Metric,
+    Provider,
     Telemetry,
+    TelemetryPoint,
     VehicleModelDisplay,
     VehicleRelation,
 )
@@ -257,7 +271,7 @@ async def test_get_vehicles_degrades_unknown_relation_and_bad_model(
     ("mock_kwargs", "error"),
     [
         pytest.param({"status": HTTPStatus.UNAUTHORIZED}, AbrpAuthError, id="401"),
-        pytest.param({"status": HTTPStatus.FORBIDDEN}, AbrpAuthError, id="403"),
+        pytest.param({"status": HTTPStatus.FORBIDDEN}, AbrpForbiddenError, id="403"),
         pytest.param(
             {"status": HTTPStatus.INTERNAL_SERVER_ERROR}, AbrpApiError, id="500"
         ),
@@ -275,7 +289,7 @@ async def test_get_vehicles_failures(
     mock_kwargs: dict[str, Any],
     error: type[Exception],
 ) -> None:
-    """401/403 raise AbrpAuthError; other HTTP, transport, shape errors API."""
+    """401 raises AbrpAuthError; 403, other HTTP, transport, shape errors API."""
     mock_api.get(VEHICLES_URL, **mock_kwargs)
 
     with pytest.raises(error):
@@ -546,19 +560,22 @@ async def test_get_catalog_malformed_vehicles_key(
 
 
 @pytest.mark.parametrize(
-    "status",
+    ("status", "error"),
     [
-        pytest.param(HTTPStatus.UNAUTHORIZED, id="401"),
-        pytest.param(HTTPStatus.FORBIDDEN, id="403"),
+        pytest.param(HTTPStatus.UNAUTHORIZED, AbrpAuthError, id="401"),
+        pytest.param(HTTPStatus.FORBIDDEN, AbrpForbiddenError, id="403"),
     ],
 )
 async def test_get_catalog_http_auth_failure(
-    client: AbrpClient, mock_api: aioresponses, status: HTTPStatus
+    client: AbrpClient,
+    mock_api: aioresponses,
+    status: HTTPStatus,
+    error: type[Exception],
 ) -> None:
-    """A 401/403 from the catalog endpoint raises AbrpAuthError."""
+    """A 401 from the catalog endpoint is AbrpAuthError; a 403 is forbidden."""
     mock_api.get(CATALOG_URL, status=status)
 
-    with pytest.raises(AbrpAuthError):
+    with pytest.raises(error):
         await client.async_get_catalog()
 
 
@@ -714,19 +731,22 @@ async def test_get_current_telemetry_rejects_non_dict_payload(
 
 
 @pytest.mark.parametrize(
-    "status",
+    ("status", "error"),
     [
-        pytest.param(HTTPStatus.UNAUTHORIZED, id="401"),
-        pytest.param(HTTPStatus.FORBIDDEN, id="403"),
+        pytest.param(HTTPStatus.UNAUTHORIZED, AbrpAuthError, id="401"),
+        pytest.param(HTTPStatus.FORBIDDEN, AbrpForbiddenError, id="403"),
     ],
 )
 async def test_get_current_telemetry_http_auth_failure(
-    client: AbrpClient, mock_api: aioresponses, status: HTTPStatus
+    client: AbrpClient,
+    mock_api: aioresponses,
+    status: HTTPStatus,
+    error: type[Exception],
 ) -> None:
-    """A 401/403 from the one-shot endpoint raises AbrpAuthError."""
+    """A 401 from the one-shot endpoint is AbrpAuthError; a 403 is forbidden."""
     mock_api.get(ONE_SHOT_URL, status=status)
 
-    with pytest.raises(AbrpAuthError):
+    with pytest.raises(error):
         await client.async_get_current_telemetry(VEHICLE_ID)
 
 
@@ -936,19 +956,22 @@ async def test_get_vehicle_model_display_strict_year_typing(
 
 
 @pytest.mark.parametrize(
-    "status",
+    ("status", "error"),
     [
-        pytest.param(HTTPStatus.UNAUTHORIZED, id="401"),
-        pytest.param(HTTPStatus.FORBIDDEN, id="403"),
+        pytest.param(HTTPStatus.UNAUTHORIZED, AbrpAuthError, id="401"),
+        pytest.param(HTTPStatus.FORBIDDEN, AbrpForbiddenError, id="403"),
     ],
 )
 async def test_get_vehicle_model_display_http_auth_failure(
-    client: AbrpClient, mock_api: aioresponses, status: HTTPStatus
+    client: AbrpClient,
+    mock_api: aioresponses,
+    status: HTTPStatus,
+    error: type[Exception],
 ) -> None:
-    """A 401/403 from the display endpoint raises AbrpAuthError."""
+    """A 401 from the display endpoint is AbrpAuthError; a 403 is forbidden."""
     mock_api.get(display_url(), status=status)
 
-    with pytest.raises(AbrpAuthError):
+    with pytest.raises(error):
         await client.async_get_vehicle_model_display(DISPLAY_TYPECODE)
 
 
@@ -1005,6 +1028,10 @@ _METHOD_CALLS: list[Any] = [
         lambda client: client.async_get_vehicle_model_display(DISPLAY_TYPECODE),
         id="vehicle_model_display",
     ),
+    pytest.param(
+        lambda client: client.async_send_telemetry(VEHICLE_ID, soc_point()),
+        id="send_telemetry",
+    ),
 ]
 
 
@@ -1050,3 +1077,474 @@ async def test_client_response_error_from_token_getter_propagates(
 
     assert excinfo.value is exc
     assert not mock_api.requests
+
+
+# ---------- async_send_telemetry ---------------------------------------------
+
+SEND_URL = f"{API_BASE_V2}/{ENDPOINT_APP_TLM}/{VEHICLE_ID}"
+# 06:30:15 at +02:00 is 04:30:15 UTC; the wire time is always UTC with "Z".
+SEND_AT = datetime(2026, 11, 9, 6, 30, 15, tzinfo=timezone(timedelta(hours=2)))
+SEND_AT_WIRE = "2026-11-09T04:30:15Z"
+
+
+def soc_point(**overrides: Any) -> TelemetryPoint:
+    """Build a minimal valid point (one soc reading) for send tests."""
+    kwargs: dict[str, Any] = {
+        "provider": Provider.APP_OBD,
+        "time": SEND_AT,
+        "soc_frac": 0.55,
+    }
+    kwargs.update(overrides)
+    return TelemetryPoint(**kwargs)
+
+
+def sent_body(mock_api: aioresponses) -> Any:
+    """Decode the JSON body of the single POST to SEND_URL."""
+    calls = mock_api.requests.get(("POST", URL(SEND_URL)), [])
+    assert len(calls) == 1
+    return json.loads(calls[0].kwargs["data"])
+
+
+async def test_send_telemetry_wire_shape(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """One POST with both v2 auth headers; set fields only, unit keys, UTC Z."""
+    mock_api.post(SEND_URL, payload={"mapInfo": {"region": "europe"}})
+    point = TelemetryPoint(
+        provider=Provider.APP_OBD,
+        time=SEND_AT,
+        soc_frac=0.55,
+        power_w=-11_000.0,
+        location=Location(59.3, 18.0),
+        charging_state=ChargingState.CHARGING_AC,
+    )
+
+    result = await client.async_send_telemetry(VEHICLE_ID, point)  # type: ignore[func-returns-value]
+
+    assert result is None
+    assert sent_body(mock_api) == {
+        "provider": "APP_OBD",
+        "soc": {"frac": 0.55, "time": SEND_AT_WIRE},
+        "power": {"w": -11_000.0, "time": SEND_AT_WIRE},
+        "location": {"lat": 59.3, "long": 18.0, "time": SEND_AT_WIRE},
+        "chargingState": {"state": "CHARGING_AC", "time": SEND_AT_WIRE},
+    }
+    kwargs = mock_api.requests[("POST", URL(SEND_URL))][0].kwargs
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["headers"]["X-API-KEY"] == API_KEY
+    assert kwargs["headers"]["X-ABRP-SESSION"] == ACCESS_TOKEN
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+
+
+async def test_send_telemetry_maps_every_field_to_the_spec(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """Every typed field lands on the spec's InputPoint key and unit key."""
+    mock_api.post(SEND_URL)
+    point = TelemetryPoint(
+        provider=Provider.APP_OBD,
+        time=SEND_AT,
+        soc_frac=0.5,
+        soh_frac=0.97,
+        power_w=1.0,
+        hvac_power_w=2.0,
+        voltage_v=3.0,
+        current_a=4.0,
+        soe_wh=5.0,
+        battery_capacity_wh=6.0,
+        charging_energy_added_wh=7.0,
+        odometer_m=8.0,
+        elevation_m=9.0,
+        estimated_battery_range_m=10.0,
+        speed_ms=11.0,
+        heading_degrees=-12.0,
+        battery_temperature_c=13.0,
+        battery_temperature_min_c=14.0,
+        battery_temperature_max_c=15.0,
+        cabin_temperature_c=16.0,
+        cabin_set_point_c=17.0,
+        external_temperature_c=18,  # an int is a valid number
+        charging_state=ChargingState.NOT_CHARGING,
+        driving_state=DrivingState.DRIVE,
+        location=Location(-33.9, 151.2),
+    )
+
+    await client.async_send_telemetry(VEHICLE_ID, point)
+
+    t = SEND_AT_WIRE
+    assert sent_body(mock_api) == {
+        "provider": "APP_OBD",
+        "soc": {"frac": 0.5, "time": t},
+        "soh": {"frac": 0.97, "time": t},
+        "power": {"w": 1.0, "time": t},
+        "hvacPower": {"w": 2.0, "time": t},
+        "voltage": {"v": 3.0, "time": t},
+        "current": {"a": 4.0, "time": t},
+        "soe": {"wh": 5.0, "time": t},
+        "batteryCapacity": {"wh": 6.0, "time": t},
+        "chargingEnergyAdded": {"wh": 7.0, "time": t},
+        "odometer": {"m": 8.0, "time": t},
+        "elevation": {"m": 9.0, "time": t},
+        "estimatedBatteryRange": {"m": 10.0, "time": t},
+        "speed": {"ms": 11.0, "time": t},
+        "heading": {"degrees": -12.0, "time": t},
+        "batteryTemperature": {"c": 13.0, "time": t},
+        "batteryTemperatureMin": {"c": 14.0, "time": t},
+        "batteryTemperatureMax": {"c": 15.0, "time": t},
+        "cabinTemperature": {"c": 16.0, "time": t},
+        "cabinSetPoint": {"c": 17.0, "time": t},
+        "externalTemperature": {"c": 18, "time": t},
+        "chargingState": {"state": "NOT_CHARGING", "time": t},
+        "drivingState": {"state": "DRIVE", "time": t},
+        "location": {"lat": -33.9, "long": 151.2, "time": t},
+    }
+
+
+async def test_send_telemetry_extra_is_merged(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """Dicts without a time get the point's; dicts with one and scalars pass."""
+    mock_api.post(SEND_URL)
+    new_metric = {"x": 1}
+    point = soc_point(
+        extra={
+            "newMetric": new_metric,
+            "timedMetric": {"x": 2, "time": "2026-01-01T00:00:00Z"},
+            "flag": True,
+        }
+    )
+    new_metric["x"] = 99  # mutating the caller's dict later changes nothing
+
+    await client.async_send_telemetry(VEHICLE_ID, point)
+
+    assert sent_body(mock_api) == {
+        "provider": "APP_OBD",
+        "soc": {"frac": 0.55, "time": SEND_AT_WIRE},
+        "newMetric": {"x": 1, "time": SEND_AT_WIRE},
+        "timedMetric": {"x": 2, "time": "2026-01-01T00:00:00Z"},
+        "flag": True,
+    }
+    assert new_metric == {"x": 99}  # the caller's dict got no "time" added
+
+
+async def test_send_telemetry_extra_only_point(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """A point may carry only extra entries; it copies, compares and pickles."""
+    mock_api.post(SEND_URL)
+    inner = [1]
+    point = TelemetryPoint(
+        provider=Provider.APP_OBD, time=SEND_AT, extra={"newMetric": {"x": inner}}
+    )
+    inner.append(2)  # nested values are copied too
+    point.extra["provider"] = "SPOOF"  # type: ignore[index]  # typed keys win
+
+    assert point != TelemetryPoint(
+        provider=Provider.APP_OBD, time=SEND_AT, extra={"newMetric": {"x": [2]}}
+    )
+    assert copy.deepcopy(point) == pickle.loads(pickle.dumps(point)) == point
+    assert "newMetric" not in repr(point)  # extra may carry anything
+    assert "59.3" not in repr(soc_point(location=Location(59.3, 18.0)))
+
+    await client.async_send_telemetry(VEHICLE_ID, point)
+
+    assert sent_body(mock_api) == {
+        "provider": "APP_OBD",
+        "newMetric": {"x": [1], "time": SEND_AT_WIRE},
+    }
+
+
+@pytest.mark.parametrize("key", ["soc", "chargingState", "location", "provider"])
+def test_send_telemetry_extra_cannot_override_typed_fields(key: str) -> None:
+    with pytest.raises(ValueError, match=key):
+        soc_point(extra={key: {"x": 1}})
+
+
+@pytest.mark.parametrize(
+    ("provider", "wire"),
+    [
+        pytest.param(Provider.APP_AUTO, "APP_AUTO", id="enum"),
+        pytest.param("APP_SOMETHING_NEW", "APP_SOMETHING_NEW", id="str"),
+    ],
+)
+async def test_send_telemetry_provider(
+    client: AbrpClient, mock_api: aioresponses, provider: Provider | str, wire: str
+) -> None:
+    mock_api.post(SEND_URL)
+
+    await client.async_send_telemetry(VEHICLE_ID, soc_point(provider=provider))
+
+    assert sent_body(mock_api)["provider"] == wire
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error", "names"),
+    [
+        pytest.param({"time": datetime(2026, 1, 1)}, ValueError, "time", id="naive"),
+        pytest.param(
+            {"time": "2026-01-01T00:00:00Z"}, TypeError, "time", id="time_str"
+        ),
+        pytest.param({"soc_frac": None}, ValueError, "metric", id="empty"),
+        pytest.param({"soc_frac": True}, TypeError, "soc_frac", id="bool"),
+        pytest.param({"soc_frac": "0.5"}, TypeError, "soc_frac", id="str_number"),
+        pytest.param({"soc_frac": math.nan}, ValueError, "soc_frac", id="nan"),
+        pytest.param({"power_w": math.inf}, ValueError, "power_w", id="inf"),
+        pytest.param(
+            {"charging_state": "CHARGING_AC"},
+            TypeError,
+            "charging_state",
+            id="enum_str",
+        ),
+        pytest.param({"location": (59.3, 18.0)}, TypeError, "location", id="tuple"),
+        pytest.param(
+            {"location": Location(math.nan, 18.0)}, ValueError, "location", id="loc_nan"
+        ),
+        pytest.param(
+            {"location": Location(59.3, math.inf)}, ValueError, "location", id="loc_inf"
+        ),
+        pytest.param({"soc_frac": 10**400}, ValueError, "soc_frac", id="huge_int"),
+        pytest.param({"provider": ""}, ValueError, "provider", id="provider_empty"),
+        pytest.param({"provider": None}, TypeError, "provider", id="provider_none"),
+        pytest.param({"extra": {1: {}}}, TypeError, "extra", id="extra_key"),
+    ],
+)
+def test_send_telemetry_rejects_bad_points(
+    overrides: dict[str, Any], error: type[Exception], names: str
+) -> None:
+    """Rejected when the point is built, so no request can be sent."""
+    with pytest.raises(error, match=names) as excinfo:
+        soc_point(**overrides)
+    assert "0.5" not in str(excinfo.value)  # messages name fields, not values
+
+
+@pytest.mark.parametrize(
+    "vehicle_id", [pytest.param(True, id="bool"), pytest.param("42", id="str")]
+)
+async def test_send_telemetry_rejects_bad_vehicle_id(
+    client: AbrpClient, mock_api: aioresponses, vehicle_id: Any
+) -> None:
+    with pytest.raises(TypeError, match="vehicle_id"):
+        await client.async_send_telemetry(vehicle_id, soc_point())
+    assert not mock_api.requests
+
+
+@pytest.mark.parametrize(
+    ("extra", "error"),
+    [
+        pytest.param({"blob": object()}, TypeError, id="unserializable"),
+        pytest.param({"blob": {"x": math.nan}}, ValueError, id="nan"),
+    ],
+)
+async def test_send_telemetry_bad_extra_fails_before_auth(
+    session: aiohttp.ClientSession,
+    mock_api: aioresponses,
+    extra: dict[str, Any],
+    error: type[Exception],
+) -> None:
+    """A body that is not valid JSON raises before the token is even fetched."""
+    client = AbrpClient(session, API_KEY, RaisingAuth(AbrpAuthError("not reached")))
+
+    with pytest.raises(error):
+        await client.async_send_telemetry(VEHICLE_ID, soc_point(extra=extra))
+    assert not mock_api.requests
+
+
+@pytest.mark.parametrize(
+    "mock_kwargs",
+    [
+        pytest.param({"status": HTTPStatus.OK, "body": "not json"}, id="200_text"),
+        pytest.param({"status": HTTPStatus.ACCEPTED}, id="202"),
+        pytest.param({"status": HTTPStatus.NO_CONTENT}, id="204"),
+    ],
+)
+async def test_send_telemetry_any_2xx_succeeds(
+    client: AbrpClient, mock_api: aioresponses, mock_kwargs: dict[str, Any]
+) -> None:
+    mock_api.post(SEND_URL, **mock_kwargs)
+
+    await client.async_send_telemetry(VEHICLE_ID, soc_point())
+
+
+@pytest.mark.parametrize(
+    ("mock_kwargs", "error", "message"),
+    [
+        pytest.param(
+            {"status": 400, "body": "soc.frac:\n  out of range"},
+            AbrpApiError,
+            "HTTP 400: soc.frac: out of range",
+            id="400",
+        ),
+        pytest.param(
+            {"status": 400, "body": '{"message": "soc.frac out of range"}'},
+            AbrpApiError,
+            "HTTP 400: soc.frac out of range",
+            id="400_json",
+        ),
+        pytest.param(
+            {"status": 400, "body": b"\xff\xfe bad"},
+            AbrpApiError,
+            "HTTP 400: ",
+            id="400_not_utf8",
+        ),
+        pytest.param(
+            {"status": 400, "body": f"echo {ACCESS_TOKEN} {API_KEY}"},
+            AbrpApiError,
+            "HTTP 400: echo",
+            id="400_echoes_secrets",
+        ),
+        pytest.param({"status": 401}, AbrpAuthError, "HTTP 401", id="401"),
+        pytest.param(
+            {"status": 403, "body": "insufficient_scope"},
+            AbrpAuthError,
+            "HTTP 403: insufficient_scope",
+            id="403",
+        ),
+        pytest.param(
+            {
+                "status": 403,
+                # A challenge that is not insufficient_scope stays forbidden.
+                "headers": {"WWW-Authenticate": 'Bearer realm="abrp"'},
+                "body": '{"message":"not allowed to view vehicle"}',
+            },
+            AbrpForbiddenError,
+            "HTTP 403: not allowed to view vehicle",
+            id="403_forbidden",
+        ),
+        pytest.param({"status": 404}, AbrpApiError, "HTTP 404", id="404"),
+        pytest.param({"status": 302}, AbrpApiError, "HTTP 302", id="redirect"),
+        pytest.param({"status": 500}, AbrpApiError, "HTTP 500", id="500"),
+        pytest.param(
+            {"exception": aiohttp.ClientError("boom")},
+            AbrpApiError,
+            "boom",
+            id="client",
+        ),
+        pytest.param({"exception": TimeoutError()}, AbrpApiError, "", id="timeout"),
+    ],
+)
+async def test_send_telemetry_errors(
+    client: AbrpClient,
+    mock_api: aioresponses,
+    mock_kwargs: dict[str, Any],
+    error: type[Exception],
+    message: str,
+) -> None:
+    mock_api.post(SEND_URL, **mock_kwargs)
+
+    with pytest.raises(error) as excinfo:
+        await client.async_send_telemetry(VEHICLE_ID, soc_point())
+
+    text = str(excinfo.value)
+    assert text.startswith(message)
+    assert ACCESS_TOKEN not in text
+    assert API_KEY not in text
+    assert "0.55" not in text  # the request body never leaks
+
+
+async def test_send_telemetry_truncates_long_error_text(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    mock_api.post(SEND_URL, status=400, body="x" * 5000)
+
+    with pytest.raises(AbrpApiError) as excinfo:
+        await client.async_send_telemetry(VEHICLE_ID, soc_point())
+
+    assert str(excinfo.value) == "HTTP 400: " + "x" * 200
+
+
+SCOPE_CHALLENGE = {
+    "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="tlm:write"'
+}
+
+
+@pytest.mark.parametrize(
+    ("mock_kwargs", "scope"),
+    [
+        pytest.param(
+            {
+                "status": 403,
+                "headers": SCOPE_CHALLENGE,
+                "body": '{"message":"insufficient_scope"}',
+            },
+            "tlm:write",
+            id="header",
+        ),
+        pytest.param(
+            {
+                "status": 403,
+                "headers": {"WWW-Authenticate": 'Bearer error="insufficient_scope"'},
+            },
+            None,
+            id="header_no_scope",
+        ),
+        pytest.param({"status": 403, "body": "insufficient_scope"}, None, id="body"),
+    ],
+)
+async def test_send_telemetry_missing_scope_raises_scope_error(
+    client: AbrpClient,
+    mock_api: aioresponses,
+    mock_kwargs: dict[str, Any],
+    scope: str | None,
+) -> None:
+    """A 403 for a missing scope is an AbrpScopeError (still an AbrpAuthError)."""
+    mock_api.post(SEND_URL, **mock_kwargs)
+
+    with pytest.raises(AbrpScopeError) as excinfo:
+        await client.async_send_telemetry(VEHICLE_ID, soc_point())
+
+    assert isinstance(excinfo.value, AbrpAuthError)
+    assert excinfo.value.scope == scope
+
+
+@pytest.mark.parametrize(
+    "mock_kwargs",
+    [
+        pytest.param(
+            {
+                "status": 401,
+                "headers": {"WWW-Authenticate": 'Bearer error="invalid_token"'},
+            },
+            id="401",
+        ),
+        pytest.param(
+            {"status": 401, "headers": SCOPE_CHALLENGE}, id="401_scope_header"
+        ),
+    ],
+)
+async def test_send_telemetry_other_auth_failures_are_not_scope_errors(
+    client: AbrpClient, mock_api: aioresponses, mock_kwargs: dict[str, Any]
+) -> None:
+    mock_api.post(SEND_URL, **mock_kwargs)
+
+    with pytest.raises(AbrpAuthError) as excinfo:
+        await client.async_send_telemetry(VEHICLE_ID, soc_point())
+
+    assert not isinstance(excinfo.value, AbrpScopeError)
+
+
+async def test_send_telemetry_forbidden_is_not_an_auth_error(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """A 403 for a valid session (vehicle not owned or shared) must not reauth."""
+    mock_api.post(
+        SEND_URL, status=403, body='{"message":"not allowed to view vehicle"}'
+    )
+
+    with pytest.raises(AbrpApiError) as excinfo:
+        await client.async_send_telemetry(VEHICLE_ID, soc_point())
+
+    assert isinstance(excinfo.value, AbrpForbiddenError)
+    assert not isinstance(excinfo.value, AbrpAuthError)
+
+
+async def test_read_missing_scope_raises_scope_error(
+    client: AbrpClient, mock_api: aioresponses
+) -> None:
+    """The read calls map the same 403 challenge to AbrpScopeError."""
+    mock_api.get(VEHICLES_URL, status=403, headers=SCOPE_CHALLENGE)
+
+    with pytest.raises(AbrpScopeError) as excinfo:
+        await client.async_get_vehicles()
+
+    assert excinfo.value.scope == "tlm:write"
+    assert str(excinfo.value) == "HTTP 403"

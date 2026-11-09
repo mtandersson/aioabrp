@@ -7,6 +7,7 @@ API_BASE_V2 = "https://api.iternio.com/2"
 # vehicle with its display metadata.
 ENDPOINT_MY_VEHICLES = "abrp/me/vehicles"
 ENDPOINT_TLM = "tlm"
+ENDPOINT_APP_TLM = "app/tlm"
 ENDPOINT_VEHICLE_LIST = "vehicle/_list"
 # Path prefix for the per-typecode vehicle-model endpoints; the typecode and
 # the ``/display`` action are appended by the client

@@ -1,8 +1,10 @@
 """Public typed models for aioabrp."""
 
-from collections.abc import Iterator
-from dataclasses import dataclass, replace
-from datetime import datetime
+import copy
+import math
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from typing import Any
 
@@ -316,3 +318,168 @@ class AbrpVehicle:
     paint: str | None = None
     display: VehicleModelDisplay | None = None
     relation: VehicleRelation | None = None
+
+
+class Provider(StrEnum):
+    """Source of a sent telemetry point; a plain str is accepted too."""
+
+    APP_LOCATION = "APP_LOCATION"
+    APP_OBD = "APP_OBD"
+    APP_AUTOMOTIVE = "APP_AUTOMOTIVE"
+    APP_AUTO = "APP_AUTO"
+    ABRP_OTA = "ABRP_OTA"
+
+
+# Field -> (InputPoint metric key, unit key).
+_NUMERIC_WIRE: dict[str, tuple[str, str]] = {
+    "soc_frac": ("soc", "frac"),
+    "soh_frac": ("soh", "frac"),
+    "power_w": ("power", "w"),
+    "hvac_power_w": ("hvacPower", "w"),
+    "voltage_v": ("voltage", "v"),
+    "current_a": ("current", "a"),
+    "soe_wh": ("soe", "wh"),
+    "battery_capacity_wh": ("batteryCapacity", "wh"),
+    "charging_energy_added_wh": ("chargingEnergyAdded", "wh"),
+    "odometer_m": ("odometer", "m"),
+    "elevation_m": ("elevation", "m"),
+    "estimated_battery_range_m": ("estimatedBatteryRange", "m"),
+    "speed_ms": ("speed", "ms"),
+    "heading_degrees": ("heading", "degrees"),
+    "battery_temperature_c": ("batteryTemperature", "c"),
+    "battery_temperature_min_c": ("batteryTemperatureMin", "c"),
+    "battery_temperature_max_c": ("batteryTemperatureMax", "c"),
+    "cabin_temperature_c": ("cabinTemperature", "c"),
+    "cabin_set_point_c": ("cabinSetPoint", "c"),
+    "external_temperature_c": ("externalTemperature", "c"),
+}
+_STATE_WIRE: dict[str, tuple[str, type[StrEnum]]] = {
+    "charging_state": ("chargingState", ChargingState),
+    "driving_state": ("drivingState", DrivingState),
+}
+_RESERVED_WIRE_KEYS = frozenset(
+    {"provider", "location"}
+    | {key for key, _ in _NUMERIC_WIRE.values()}
+    | {key for key, _ in _STATE_WIRE.values()}
+)
+
+
+def _check_number(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"{name} must be an int or float")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
+        raise ValueError(f"{name} must be finite")
+
+
+def _wire_time(value: datetime) -> str:
+    """Format ``value`` as ISO 8601 UTC with a ``Z`` suffix."""
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryPoint:
+    """One telemetry point for :meth:`AbrpClient.async_send_telemetry`.
+
+    All metrics share one timezone-aware ``time``. Field names carry ABRP's
+    wire unit and values are sent unconverted (``soc_frac`` 0.55 = 55 %).
+    ``extra`` holds spec fields newer than this library; it is deep-copied,
+    and a mapping value without ``"time"`` gets the point's time. Types
+    are checked here, ranges are left to ABRP.
+    """
+
+    provider: Provider | str
+    time: datetime
+    soc_frac: float | None = None
+    soh_frac: float | None = None
+    power_w: float | None = None
+    hvac_power_w: float | None = None
+    voltage_v: float | None = None
+    current_a: float | None = None
+    soe_wh: float | None = None
+    battery_capacity_wh: float | None = None
+    charging_energy_added_wh: float | None = None
+    odometer_m: float | None = None
+    elevation_m: float | None = None
+    estimated_battery_range_m: float | None = None
+    speed_ms: float | None = None
+    heading_degrees: float | None = None
+    battery_temperature_c: float | None = None
+    battery_temperature_min_c: float | None = None
+    battery_temperature_max_c: float | None = None
+    cabin_temperature_c: float | None = None
+    cabin_set_point_c: float | None = None
+    external_temperature_c: float | None = None
+    charging_state: ChargingState | None = None
+    driving_state: DrivingState | None = None
+    location: Location | None = field(default=None, repr=False)
+    extra: Mapping[str, Any] = field(default_factory=dict, repr=False, hash=False)
+
+    def __post_init__(self) -> None:
+        """Check types and copy ``extra``."""
+        if not isinstance(self.provider, str):
+            raise TypeError("provider must be a Provider or str")
+        if not self.provider:
+            raise ValueError("provider must not be empty")
+        if not isinstance(self.time, datetime):
+            raise TypeError("time must be a datetime")
+        if self.time.utcoffset() is None:
+            raise ValueError("time must be timezone-aware")
+        has_metric = False
+        for name in _NUMERIC_WIRE:
+            value = getattr(self, name)
+            if value is not None:
+                _check_number(name, value)
+                has_metric = True
+        for name, (_, enum_type) in _STATE_WIRE.items():
+            value = getattr(self, name)
+            if value is not None:
+                if not isinstance(value, enum_type):
+                    raise TypeError(f"{name} must be a {enum_type.__name__}")
+                has_metric = True
+        if self.location is not None:
+            if not isinstance(self.location, Location):
+                raise TypeError("location must be a Location")
+            _check_number("location", self.location.lat)
+            _check_number("location", self.location.lon)
+            has_metric = True
+        if not isinstance(self.extra, Mapping):
+            raise TypeError("extra must be a mapping")
+        for key in self.extra:
+            if not isinstance(key, str):
+                raise TypeError("extra keys must be str")
+            if key in _RESERVED_WIRE_KEYS:
+                raise ValueError(f"extra key {key!r} is a typed field; set it there")
+        if not has_metric and not self.extra:
+            raise ValueError("a point needs at least one metric or extra entry")
+        copied = copy.deepcopy(
+            {k: dict(v) if isinstance(v, Mapping) else v for k, v in self.extra.items()}
+        )
+        object.__setattr__(self, "extra", copied)
+
+    def _to_wire(self) -> dict[str, Any]:
+        """Return the ``InputPoint`` JSON body for this point."""
+        time = _wire_time(self.time)
+        body: dict[str, Any] = {"provider": str(self.provider)}
+        for name, (key, unit) in _NUMERIC_WIRE.items():
+            value = getattr(self, name)
+            if value is not None:
+                body[key] = {unit: value, "time": time}
+        for name, (key, _) in _STATE_WIRE.items():
+            value = getattr(self, name)
+            if value is not None:
+                body[key] = {"state": value.name, "time": time}
+        if self.location is not None:
+            body["location"] = {
+                "lat": self.location.lat,
+                "long": self.location.lon,
+                "time": time,
+            }
+        for key, value in self.extra.items():
+            if key in _RESERVED_WIRE_KEYS:  # typed fields win
+                continue
+            body[key] = {"time": time, **value} if isinstance(value, dict) else value
+        return body

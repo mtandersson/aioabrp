@@ -4,7 +4,13 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .auth import AbrpIdentity, AbstractAuth, StaticAuth, parse_unverified_identity
 from .client import AbrpClient
-from .exceptions import AbrpApiError, AbrpAuthError, AbrpError
+from .exceptions import (
+    AbrpApiError,
+    AbrpAuthError,
+    AbrpError,
+    AbrpForbiddenError,
+    AbrpScopeError,
+)
 from .models import (
     AbrpVehicle,
     CatalogEntry,
@@ -16,8 +22,10 @@ from .models import (
     MapInfo,
     Metric,
     MetricValue,
+    Provider,
     Region,
     Telemetry,
+    TelemetryPoint,
     VehicleModelDisplay,
     VehicleRelation,
 )
@@ -35,7 +43,9 @@ __all__ = [
     "AbrpAuthError",
     "AbrpClient",
     "AbrpError",
+    "AbrpForbiddenError",
     "AbrpIdentity",
+    "AbrpScopeError",
     "AbrpVehicle",
     "AbstractAuth",
     "CatalogEntry",
@@ -47,9 +57,11 @@ __all__ = [
     "MapInfo",
     "Metric",
     "MetricValue",
+    "Provider",
     "Region",
     "StaticAuth",
     "Telemetry",
+    "TelemetryPoint",
     "TelemetryStream",
     "VehicleModelDisplay",
     "VehicleRelation",

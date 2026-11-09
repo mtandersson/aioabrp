@@ -17,6 +17,8 @@ EXPECTED_PUBLIC_API = {
     "Metric",
     "MetricValue",
     "Telemetry",
+    "TelemetryPoint",
+    "Provider",
     "ChargingState",
     "DrivingState",
     "Region",
@@ -26,7 +28,9 @@ EXPECTED_PUBLIC_API = {
     "ConnectionEvent",
     "AbrpError",
     "AbrpAuthError",
+    "AbrpScopeError",
     "AbrpApiError",
+    "AbrpForbiddenError",
     "__version__",
 }
 

@@ -266,6 +266,49 @@ from those times, each clamped not-future. Only times are needed; no typed
 values. The clock is the `aioabrp._clock._now` seam (the monkeypatch target in
 tests).
 
+### Sending telemetry
+
+`AbrpClient.async_send_telemetry(vehicle_id, point)` sends one
+`TelemetryPoint` (`POST /2/app/tlm/{vehicle_id}`). The access token needs the
+`tlm:write` scope. A token without it raises `AbrpScopeError` (a subclass of
+`AbrpAuthError`, HTTP 403 `insufficient_scope`) with `.scope` naming the
+missing scope: the token is still valid and needs re-authorizing with that
+scope. Any call raises it when ABRP reports a missing scope. Any other 403
+(say, a vehicle that is neither owned nor shared) raises `AbrpForbiddenError`,
+an `AbrpApiError`: the session is fine, so re-authenticating won't help.
+
+```python
+from datetime import UTC, datetime
+
+from aioabrp import ChargingState, Location, Provider, TelemetryPoint
+
+point = TelemetryPoint(
+    provider=Provider.APP_OBD,
+    time=datetime.now(UTC),
+    soc_frac=0.55,
+    power_w=-11_000.0,
+    location=Location(59.33, 18.07),
+    charging_state=ChargingState.CHARGING_AC,
+)
+await client.async_send_telemetry(vehicle_id, point)
+```
+
+- **One time for all metrics.** `time` must be timezone-aware and is sent as
+  UTC.
+- **Units are in the field names** and are ABRP's wire units, sent
+  unconverted: `soc_frac` is a fraction (0.55 = 55 %; the read side's
+  `Telemetry.soc` is percent), then W, V, A, Wh, m, m/s (`speed_ms`), degrees
+  and °C. Unset fields are not sent. Metrics ABRP computes itself (map info,
+  calibrated values, speed factor) cannot be sent.
+- **Newer spec fields** go in `extra`, which is added to the request body
+  as-is. A mapping value without a `"time"` gets the point's time. A key
+  that names a typed field (or `provider`) raises `ValueError`. `provider`
+  also accepts a plain string for a provider newer than the `Provider` enum.
+- **Types are checked when the point is built:** a `bool`, a non-finite
+  number or a string where a number or enum belongs raises, and so does a
+  point with no metric and no `extra`. Ranges are left to ABRP: its HTTP 400
+  raises `AbrpApiError` carrying ABRP's error text.
+
 ### Logging
 
 Enable the `aioabrp` logger at `DEBUG` for triage. Connect/disconnect and
@@ -312,6 +355,17 @@ access token is short-lived, so refresh it right before a run. The account
 needs at least one vehicle, and at least two for the `set_vehicle_ids` test
 (skipped otherwise). The suite takes about 30 seconds.
 
+One more test writes to a real vehicle, so `-m live` never selects it:
+
+```sh
+ABRP_WRITE_VEHICLE_ID=<vehicle id> uv run pytest -m live_write
+```
+
+It reads that vehicle's current state of charge and sends the same value
+back, so the vehicle's data does not change (it is skipped when there is no
+current SoC). `ABRP_WRITE_VEHICLE_ID` can also live in `.env`; the token must
+be allowed to write telemetry.
+
 ### Releases
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/);
@@ -323,7 +377,7 @@ To cut a release, a maintainer runs the **Release** workflow manually
 (`workflow_dispatch`, from `main`). It runs the quality gate, then derives the
 next version from the Conventional Commits since the last tag with
 [git-cliff](https://git-cliff.org/) (`feat` → minor, `fix` → patch,
-breaking → major) — or uses the optional `version` input (`X.Y.Z`) to force a
+breaking → major from 1.0 on, minor before it) — or uses the optional `version` input (`X.Y.Z`) to force a
 specific version; leave it blank to auto-derive. The workflow tags `vX.Y.Z`,
 builds the sdist + wheel (hatch-vcs reads the version from the tag), publishes
 to PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)

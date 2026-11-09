@@ -1,12 +1,14 @@
-"""Live, read-only tests against the real ABRP API (opt-in).
+"""Live tests against the real ABRP API (opt-in).
 
-Deselected by default (``addopts = -m "not live"``), so plain ``uv run
-pytest`` and CI never touch the network. Run them explicitly::
+Deselected by default (``addopts = -m "not live and not live_write"``), so
+plain ``uv run pytest`` and CI never touch the network. Run the read-only
+ones explicitly::
 
     uv run pytest -m live
 
 ``pytest tests/test_live.py`` alone still deselects them; ``-m live`` is
-what opts in.
+what opts in. The write test runs only with exactly ``-m live_write`` and
+needs ``ABRP_WRITE_VEHICLE_ID``; it sends the vehicle's current SoC back.
 
 Credentials: ``ABRP_API_KEY`` (v2 partner key) and ``ABRP_ACCESS_TOKEN``
 (per-user session token), from the environment or the repo-root ``.env``
@@ -46,8 +48,10 @@ from aioabrp import (
     AbrpClient,
     AbrpVehicle,
     ConnectionState,
+    Provider,
     StaticAuth,
     Telemetry,
+    TelemetryPoint,
     TelemetryStream,
 )
 from aioabrp.stream import VEHICLES_CHANGED_REASON
@@ -60,6 +64,8 @@ AUTH_HINT = (
     "invalid). Refresh ABRP_ACCESS_TOKEN with the ABRP auth-cli: "
     "go run . get-access-token"
 )
+WRITE_VEHICLE_VAR = "ABRP_WRITE_VEHICLE_ID"
+LIVE_WRITE_TESTS = {"test_send_current_soc_back"}
 LIVE_TESTS = {
     "test_catalog_is_not_empty",
     "test_garage_display_matches_the_display_endpoint",
@@ -69,6 +75,7 @@ LIVE_TESTS = {
 }
 
 live = pytest.mark.live
+live_write = pytest.mark.live_write
 
 LiveStreamFactory = Callable[[list[int], CallbackRecorder], TelemetryStream]
 
@@ -127,17 +134,39 @@ def load_credentials(
     return present["ABRP_API_KEY"], StaticAuth(present["ABRP_ACCESS_TOKEN"])
 
 
+def load_write_vehicle_id(environ: Mapping[str, str], env_file: Path) -> int:
+    """Return the vehicle the write test may post to; the environment wins."""
+    __tracebackhide__ = True
+    raw = (
+        environ.get(WRITE_VEHICLE_VAR, "").strip()
+        or _read_env_file(env_file).get(WRITE_VEHICLE_VAR, "").strip()
+    )
+    if not raw:
+        pytest.fail(
+            f"the live write test needs {WRITE_VEHICLE_VAR} (environment or "
+            f"{env_file.name}): the id of a vehicle it may post to",
+            pytrace=False,
+        )
+    try:
+        return int(raw)
+    except ValueError:
+        pytest.fail(f"{WRITE_VEHICLE_VAR} must be an integer vehicle id", pytrace=False)
+
+
 @contextmanager
-def api_errors(what: str) -> Iterator[None]:
-    """Turn ABRP errors into one-line failures with no traceback."""
+def api_errors(what: str, *, redact: str = "") -> Iterator[None]:
+    """Turn ABRP errors into one-line failures; ``redact`` is masked out."""
     __tracebackhide__ = True
     try:
         yield
     except AbrpAuthError as err:
-        pytest.fail(f"{what}: {AUTH_HINT} ({err})", pytrace=False)
+        detail = str(err).replace(redact, "<redacted>") if redact else str(err)
+        pytest.fail(f"{what}: {AUTH_HINT} ({detail})", pytrace=False)
     except AbrpApiError as err:
         # aiohttp error text can carry the request URL (and a vehicle id).
         detail = re.sub(r"url='[^']*'", "url=<redacted>", str(err))
+        if redact:
+            detail = detail.replace(redact, "<redacted>")
         pytest.fail(f"{what}: {type(err).__name__}: {detail}", pytrace=False)
 
 
@@ -329,6 +358,22 @@ async def test_set_vehicle_ids_grow_noop_empty_narrow(
     )
 
 
+@live_write
+async def test_send_current_soc_back(client: AbrpClient) -> None:
+    vehicle_id = load_write_vehicle_id(os.environ, ENV_FILE)
+    with api_errors("snapshot for the write vehicle", redact=str(vehicle_id)):
+        telemetry = await client.async_get_current_telemetry(vehicle_id)
+    if telemetry.soc is None or telemetry.soc.time is None:
+        pytest.skip("the write vehicle has no timed current SoC to send back")
+    point = TelemetryPoint(
+        provider=Provider.APP_OBD,
+        time=telemetry.soc.time,
+        soc_frac=telemetry.soc.value / 100,  # read side is percent
+    )
+    with api_errors("send telemetry", redact=str(vehicle_id)):
+        await client.async_send_telemetry(vehicle_id, point)
+
+
 # Normal suite (no network): the opt-in and the credential rules.
 
 
@@ -369,6 +414,13 @@ def test_live_tests_run_only_when_selected() -> None:
     assert selected == LIVE_TESTS
     assert default
     assert not default & LIVE_TESTS, "live tests collected without -m live"
+    assert not (default | selected) & LIVE_WRITE_TESTS, "write test selected"
+    for broad in ("not live", ""):
+        _, names = _collect("-m", broad)
+        assert not names & LIVE_WRITE_TESTS, f"-m {broad!r} selects the write test"
+    code, write = _collect("-m", "live_write")
+    assert code == 0
+    assert write == LIVE_WRITE_TESTS
 
 
 async def test_credentials_env_wins_and_missing_vars_are_named(
@@ -397,3 +449,18 @@ async def test_credentials_env_wins_and_missing_vars_are_named(
     ):
         raise AbrpAuthError("HTTP 401")
     assert rejected.value.pytrace is False
+
+
+def test_write_vehicle_id_env_wins_and_bad_values_are_named(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{WRITE_VEHICLE_VAR}=111\n")
+    assert load_write_vehicle_id({}, env_file) == 111
+    assert load_write_vehicle_id({WRITE_VEHICLE_VAR: "222"}, env_file) == 222
+
+    with pytest.raises(pytest.fail.Exception, match=WRITE_VEHICLE_VAR) as missing:
+        load_write_vehicle_id({WRITE_VEHICLE_VAR: " "}, tmp_path / "absent.env")
+    assert missing.value.pytrace is False
+
+    with pytest.raises(pytest.fail.Exception, match=WRITE_VEHICLE_VAR) as bad:
+        load_write_vehicle_id({WRITE_VEHICLE_VAR: "car-42"}, env_file)
+    assert "car-42" not in str(bad.value)
