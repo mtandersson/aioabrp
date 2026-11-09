@@ -39,7 +39,7 @@ from aioabrp.stream import TelemetryStream
 WAIT_TIMEOUT = 5.0
 
 # One scripted server action: ("frame", dict) | ("raw", bytes)
-# | ("sleep", seconds) | ("close", None) | ("status", int).
+# | ("sleep", seconds) | ("close", None) | ("status", int | (int, headers)).
 SseAction = tuple[str, Any]
 
 # The shape of the ``stream_factory`` fixture's return value, shared by
@@ -58,6 +58,7 @@ class SseScript:
     * ``("close", None)`` — end the chunked response (server-side close).
     * ``("status", int)`` — respond with this HTTP status instead of a
       stream (must be the first action; the connection never streams).
+      ``("status", (int, headers))`` adds response headers.
 
     Falling off the end of the action list closes the response, same as
     an explicit ``("close", None)``.
@@ -120,7 +121,10 @@ class SseServerHarness:
         for action, payload in script.actions:
             if action == "status":
                 assert response is None, "status must be the first action"
-                return web.Response(status=payload)
+                status, headers = (
+                    payload if isinstance(payload, tuple) else (payload, {})
+                )
+                return web.Response(status=status, headers=headers)
             if response is None:
                 response = web.StreamResponse()
                 response.headers["Content-Type"] = "text/event-stream"

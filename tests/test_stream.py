@@ -187,6 +187,50 @@ async def test_reconnects_after_server_close(
     assert len(sse_server.requests) == 2
 
 
+async def test_http_403_insufficient_scope_is_terminal(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+) -> None:
+    """A missing scope needs re-authorizing, so it stops like a 401."""
+    challenge = {
+        "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="tlm:read"'
+    }
+    sse_server.scripts = [SseScript([("status", (403, challenge))])]
+    stream = stream_factory()
+    await stream.start()
+    await recorder.wait_for_state(ConnectionState.AUTH_FAILED)
+
+    assert "insufficient_scope" in (recorder.events[0].reason or "")
+    await asyncio.sleep(0.3)
+    assert len(sse_server.requests) == 1
+
+
+async def test_http_403_without_scope_challenge_backs_off_and_retries(
+    sse_server: SseServerHarness,
+    recorder: CallbackRecorder,
+    stream_factory: StreamFactory,
+) -> None:
+    """A plain 403 (no vehicle accessible) is not AUTH_FAILED: reauth won't fix it.
+
+    The session is valid, so the stream disconnects and retries with backoff.
+    """
+    sse_server.scripts = [
+        # A challenge that is not insufficient_scope is still not terminal.
+        SseScript([("status", (403, {"WWW-Authenticate": 'Bearer realm="abrp"'}))]),
+        SseScript([("frame", build_frame(1, soc=0.5)), ("sleep", 30)]),
+    ]
+    stream = stream_factory()
+    await stream.start()
+    await recorder.wait_for_updates(1)
+
+    assert recorder.states == [
+        ConnectionState.DISCONNECTED,
+        ConnectionState.CONNECTED,
+    ]
+    assert "403" in (recorder.events[0].reason or "")
+
+
 async def test_http_401_at_connect_is_terminal(
     sse_server: SseServerHarness,
     recorder: CallbackRecorder,

@@ -207,7 +207,9 @@ Notes:
   the very first connection attempt fails).
 - `AUTH_FAILED` is **terminal**: the stream stops itself and will not
   retry. The consumer decides whether/when to restart with fresh
-  credentials.
+  credentials. It fires on an HTTP 401 or a 403 `insufficient_scope`. Any
+  other 403 (none of the requested vehicles is accessible) is a
+  `DISCONNECTED` with backoff, since re-authenticating would not fix it.
 - A transient (non-`AbrpAuthError`) failure from the token getter emits
   **no** `ConnectionEvent` at all (debug log only) — no connection attempt
   was made, so consumers keep seeing the last known state during a
