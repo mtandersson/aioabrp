@@ -4,19 +4,30 @@
 
 [changelog]
 header = ""
-# Breaking entries also list their BREAKING CHANGE footer as a nested
-# bullet; a bare `type!:` has no footer text, so it gets none.
+# "Breaking changes" lists every breaking commit, whatever its type, with
+# its BREAKING CHANGE footer as a nested bullet (a bare `type!:` has no
+# footer text, so it gets none). The type groups below it list the other
+# commits again by title, so a breaking feature still shows under Features.
 body = """
-{% for group, commits in commits | group_by(attribute="group") %}
-### {{ group | striptags | trim | upper_first }}
-{% for commit in commits %}
+{%- set breaking = commits | filter(attribute="breaking", value=true) %}
+{%- if breaking %}
+### Breaking changes
+{% for commit in breaking %}
 {%- set subject = commit.message | split(pat="\n") | first %}
 - {{ subject | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
-{%- if commit.breaking and commit.breaking_description and commit.breaking_description != subject %}
+{%- if commit.breaking_description and commit.breaking_description != subject %}
   - {{ commit.breaking_description | split(pat="\n") | join(sep=" ") | upper_first }}
 {%- endif %}
 {%- endfor %}
-{% endfor %}
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+{%- if group is not containing("Breaking only") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{%- endfor %}
+{% endif %}
+{%- endfor %}
 """
 footer = ""
 # Not trimmed: trim strips each line's indentation and flattens the bullets.
@@ -34,12 +45,13 @@ commit_parsers = [
   # GitHub's PR merge commits only wrap the commits they merge, which are
   # already listed on their own.
   { message = "^Merge (pull request|branch) ", skip = true },
-  # Breaking changes of any type (`type!:` or a BREAKING CHANGE footer).
-  { field = "breaking", pattern = "true", group = "<!-- 0 -->Breaking changes" },
   { message = "^feat", group = "<!-- 1 -->Features" },
   { message = "^fix", group = "<!-- 2 -->Bug fixes" },
   { message = "^perf", group = "<!-- 3 -->Performance" },
   { message = "^docs?", group = "<!-- 4 -->Documentation" },
+  # A breaking change of a type skipped below (refactor!, chore!, ...) is
+  # listed only under "Breaking changes"; this group is not printed.
+  { field = "breaking", pattern = "true", group = "<!-- 9 -->Breaking only" },
   # Release notes are for library users: changes with no user-visible effect
   # stay in the git history only (breaking ones are caught above). A build
   # change that affects users (e.g. a runtime dependency) should be

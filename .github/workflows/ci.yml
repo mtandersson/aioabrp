@@ -53,11 +53,44 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"
 
+  release-notes:
+    # Previews the next release's version and notes in the run's summary, so
+    # they are seen before merge. Fails if cliff.toml no longer renders.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history + tags, as in the release workflow. The PR's own
+          # head, not GitHub's synthetic merge commit, which would show up
+          # under "Other".
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Preview release notes
+        run: |
+          set -euo pipefail
+          notes="$(uv tool run git-cliff@2.13.1 --unreleased --bump --strip all)"
+          {
+            # Right after a release, or with only skipped commits, there is
+            # nothing to release (git-cliff warns but exits 0).
+            if [ -z "${notes//[[:space:]]/}" ]; then
+              echo "## No releasable changes"
+            else
+              echo "## Next release: $(uv tool run git-cliff@2.13.1 --bumped-version)"
+              echo "$notes"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   required:
     # The single required status check on main: passes only when every job
     # above passed. Add new jobs to `needs` instead of editing the ruleset.
     if: always()
-    needs: [ci, secrets]
+    needs: [ci, secrets, release-notes]
     runs-on: ubuntu-latest
     steps:
       - name: All checks passed
