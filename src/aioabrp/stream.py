@@ -103,7 +103,8 @@ class TelemetryStream:
     the injected :class:`~aioabrp.auth.AbstractAuth`; a transparent
     consumer-side refresh prevents a spurious 401 once a short-lived
     access token lapses. Only :class:`~aioabrp.exceptions.AbrpAuthError`
-    — from the token getter or as an HTTP 401/403 on the stream — is
+    — from the token getter, or an HTTP 401 or 403 ``insufficient_scope``
+    on the stream — is
     terminal (``AUTH_FAILED`` event, task exits). Any other token-getter
     or transport failure falls through to the backoff path.
 
@@ -489,9 +490,11 @@ class TelemetryStream:
         is the caller's watchdog, not ``sock_read``.
 
         Raises:
-            AbrpAuthError: HTTP 401/403 (session rejected by ABRP).
-            AbrpApiError: any other HTTP/transport/parse failure; the
-                caller treats it as a transient disconnect.
+            AbrpAuthError: HTTP 401 (session rejected by ABRP), or a 403
+                ``insufficient_scope`` (the token needs re-authorizing).
+            AbrpApiError: any other HTTP (including a plain 403: no
+                requested vehicle is accessible), transport or parse
+                failure; the caller treats it as a transient disconnect.
 
         """
         url = f"{API_BASE_V2}/{ENDPOINT_TLM}"
@@ -512,11 +515,16 @@ class TelemetryStream:
                     sock_connect=SSE_SOCK_CONNECT_TIMEOUT_SECONDS,
                 ),
             ) as response:
-                if response.status in (
-                    HTTPStatus.UNAUTHORIZED,
-                    HTTPStatus.FORBIDDEN,
-                ):
+                if response.status == HTTPStatus.UNAUTHORIZED:
                     raise AbrpAuthError(f"HTTP {response.status}")
+                challenge = response.headers.get("WWW-Authenticate", "")
+                if (
+                    response.status == HTTPStatus.FORBIDDEN
+                    and "insufficient_scope" in challenge
+                ):
+                    raise AbrpAuthError("HTTP 403: insufficient_scope")
+                # Any other 403 comes with a valid session (no requested
+                # vehicle is accessible): reauth won't fix it, so back off.
                 if response.status >= HTTPStatus.BAD_REQUEST:
                     raise AbrpApiError(f"HTTP {response.status}")
                 async for event in iter_sse_events(response.content):

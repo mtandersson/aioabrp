@@ -336,7 +336,7 @@ async def test_stop_after_auth_failed_no_callbacks_after_stop(
     stream_factory: StreamFactory,
 ) -> None:
     """stop() after the AUTH_FAILED self-stop is clean and silent."""
-    sse_server.scripts = [SseScript([("status", 403)])]
+    sse_server.scripts = [SseScript([("status", 401)])]
     stream = stream_factory()
     await stream.start()
     await recorder.wait_for_state(ConnectionState.AUTH_FAILED)
