@@ -6,6 +6,7 @@ payload segment of an ``id_token`` to yield an :class:`AbrpIdentity`:
 * ``subject`` — the OIDC ``sub`` claim, a stable, non-empty unique id.
 * ``display_name`` — the ``name`` -> ``email`` display-claim chain, stripped,
   or ``None`` when neither qualifies.
+* ``email`` — the ``email`` claim alone, stripped, or ``None``.
 
 Any malformed token, or a missing/empty ``sub``, raises ``AbrpAuthError``.
 Tokens are hand-built locally so the tests need no real identity provider.
@@ -36,7 +37,9 @@ def test_subject_and_name() -> None:
     identity = parse_unverified_identity(
         _make_token({"sub": "user-123", "name": "Alice", "email": "a@example.com"})
     )
-    assert identity == AbrpIdentity(subject="user-123", display_name="Alice")
+    assert identity == AbrpIdentity(
+        subject="user-123", display_name="Alice", email="a@example.com"
+    )
 
 
 def test_email_used_when_no_name() -> None:
@@ -44,6 +47,25 @@ def test_email_used_when_no_name() -> None:
         _make_token({"sub": "user-123", "email": "a@example.com"})
     )
     assert identity.display_name == "a@example.com"
+
+
+@pytest.mark.parametrize(
+    ("claims", "email"),
+    [
+        pytest.param(
+            {"name": "Alice", "email": " a@example.com "}, "a@example.com", id="present"
+        ),
+        pytest.param({"name": "Alice"}, None, id="missing"),
+        pytest.param({"name": "Alice", "email": 42}, None, id="non_string"),
+        pytest.param({"name": "Alice", "email": "  "}, None, id="blank"),
+    ],
+)
+def test_email_is_its_own_claim(claims: dict[str, Any], email: str | None) -> None:
+    """``email`` never falls back to ``name``, unlike ``display_name``."""
+    identity = parse_unverified_identity(_make_token({"sub": "user-123", **claims}))
+
+    assert identity.email == email
+    assert identity.display_name == "Alice"
 
 
 def test_display_name_none_when_no_name_or_email() -> None:

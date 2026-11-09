@@ -49,6 +49,13 @@ class AbrpIdentity:
     display_name: str | None
     """``name`` -> ``email`` claim chain, stripped; ``None`` if neither qualifies."""
 
+    email: str | None = None
+    """``email`` claim alone, stripped; ``None`` if missing or not a non-empty str.
+
+    Unlike ``display_name`` it never falls back to ``name``, so it is safe to use
+    as an OAuth ``login_hint``.
+    """
+
 
 def parse_unverified_identity(id_token: str) -> AbrpIdentity:
     """Extract identity from an ABRP ``id_token`` WITHOUT verifying its signature.
@@ -60,7 +67,7 @@ def parse_unverified_identity(id_token: str) -> AbrpIdentity:
     is the contract: callers must not treat the result as authenticated.
 
     Raises :class:`AbrpAuthError` on any malformed token or a missing/empty
-    ``sub``. A ``None`` ``display_name`` is normal, not an error.
+    ``sub``. A ``None`` ``display_name`` or ``email`` is normal, not an error.
     """
     try:
         payload_b64 = id_token.split(".")[1]
@@ -79,11 +86,11 @@ def parse_unverified_identity(id_token: str) -> AbrpIdentity:
     if not isinstance(subject, str) or not subject:
         raise AbrpAuthError("id_token has no usable 'sub' claim")
 
-    display_name: str | None = None
-    for key in ("name", "email"):
+    def claim(key: str) -> str | None:
         value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            display_name = value.strip()
-            break
+        return value.strip() if isinstance(value, str) and value.strip() else None
 
-    return AbrpIdentity(subject=subject, display_name=display_name)
+    email = claim("email")
+    return AbrpIdentity(
+        subject=subject, display_name=claim("name") or email, email=email
+    )
