@@ -99,6 +99,7 @@ from aioabrp import parse_unverified_identity
 identity = parse_unverified_identity(id_token)
 identity.subject       # OIDC `sub` — stable, non-empty; use as your unique id
 identity.display_name  # `name` then `email`, stripped; None if neither present
+identity.email         # the `email` claim alone, stripped, or None (e.g. a login_hint)
 ```
 
 The decode is **unverified** — it reads claims without checking the signature.
