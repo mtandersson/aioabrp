@@ -10,6 +10,8 @@ Wire surface:
   extracted into the library's typed event shape.
 * ``GET /2/vehicle-model/by-typecode/{typecode}/display`` — per-typecode
   display metadata (bare JSON, no envelope).
+* ``POST /2/app/tlm/{vehicle_id}`` — send one telemetry point (JSON
+  ``InputPoint`` body; the response body is ignored).
 
 All endpoints split auth across two headers: the static partner key
 in ``X-API-KEY`` and the per-user session token in ``X-ABRP-SESSION``.
@@ -23,12 +25,14 @@ propagates to the caller untouched instead of being laundered into
 :class:`~aioabrp.exceptions.AbrpApiError`.
 """
 
+import json
+import re
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import quote
 
-from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
 
 # ``_clock`` is imported as a module (not ``from ._clock import _now``) so the
 # clamp site reads ``_clock._now()`` via attribute access — tests monkeypatch
@@ -40,6 +44,7 @@ from ._extract import extract_metrics
 from .auth import AbstractAuth
 from .const import (
     API_BASE_V2,
+    ENDPOINT_APP_TLM,
     ENDPOINT_MY_VEHICLES,
     ENDPOINT_TLM,
     ENDPOINT_VEHICLE_LIST,
@@ -48,14 +53,24 @@ from .const import (
     HEADER_API_KEY,
     ONE_SHOT_TIMEOUT_SECONDS,
 )
-from .exceptions import AbrpApiError, AbrpAuthError
+from .exceptions import (
+    AbrpApiError,
+    AbrpAuthError,
+    AbrpError,
+    AbrpForbiddenError,
+    AbrpScopeError,
+)
 from .models import (
     AbrpVehicle,
     CatalogEntry,
     Telemetry,
+    TelemetryPoint,
     VehicleModelDisplay,
     VehicleRelation,
 )
+
+# The scope a ``WWW-Authenticate: Bearer error="insufficient_scope"`` names.
+_SCOPE_RE = re.compile(r'scope="([^"]*)"')
 
 _RELATIONS = {relation.name: relation for relation in VehicleRelation}
 
@@ -93,7 +108,7 @@ class AbrpClient:
         in ABRP's order (currently owned first, then shared, each by id).
 
         Raises:
-            AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
+            AbrpAuthError: HTTP 401 (session rejected by ABRP), or,
                 untouched, from the token getter.
             AbrpApiError: any other HTTP, transport, timeout, parse, or
                 malformed-item failure.
@@ -122,7 +137,7 @@ class AbrpClient:
         probe-confirmed on the catalog endpoint.
 
         Raises:
-            AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
+            AbrpAuthError: HTTP 401 (session rejected by ABRP), or,
                 untouched, from the token getter.
             AbrpApiError: any other 4xx/5xx HTTP, transport, timeout, or
                 parse failure. Consumers may treat this as non-fatal and
@@ -163,7 +178,7 @@ class AbrpClient:
         back as a seed.
 
         Raises:
-            AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
+            AbrpAuthError: HTTP 401 (session rejected by ABRP), or,
                 untouched, from the token getter.
             AbrpApiError: any other 4xx/5xx HTTP, transport, timeout, or
                 parse failure.
@@ -195,7 +210,7 @@ class AbrpClient:
         into the path segment so a structural character cannot escape it.
 
         Raises:
-            AbrpAuthError: HTTP 401/403 (session rejected by ABRP), or,
+            AbrpAuthError: HTTP 401 (session rejected by ABRP), or,
                 untouched, from the token getter.
             AbrpApiError: any other 4xx/5xx HTTP (including 404 for an unknown
                 typecode — there is no None/not-found sentinel; catch this to
@@ -209,6 +224,31 @@ class AbrpClient:
             what="vehicle-model display",
         )
         return _parse_vehicle_model_display(payload)
+
+    async def async_send_telemetry(
+        self, vehicle_id: int, point: TelemetryPoint
+    ) -> None:
+        """Send one telemetry point (``POST /2/app/tlm/{vehicle_id}``).
+
+        The token must be allowed to write telemetry. Any 2xx is success.
+
+        Raises:
+            TypeError: ``vehicle_id`` is not an int, or ``extra`` is not
+                JSON-serializable (raised before any request).
+            ValueError: ``extra`` holds a non-finite float.
+            AbrpScopeError: HTTP 403 ``insufficient_scope``; the token lacks
+                the scope in ``.scope`` (``tlm:write``) and needs re-authorizing.
+            AbrpAuthError: HTTP 401 (session rejected), or from the token getter.
+            AbrpForbiddenError: any other HTTP 403, e.g. a vehicle neither owned
+                nor shared; an AbrpApiError, so reauth is not the fix.
+            AbrpApiError: any other non-2xx, transport or timeout failure,
+                with ABRP's error text when it sent one.
+
+        """
+        if isinstance(vehicle_id, bool) or not isinstance(vehicle_id, int):
+            raise TypeError("vehicle_id must be an int")
+        body = json.dumps(point._to_wire(), allow_nan=False)
+        await self._post_v2(f"{API_BASE_V2}/{ENDPOINT_APP_TLM}/{vehicle_id}", body)
 
     async def _get_v2_json(self, url: str, *, what: str) -> dict[str, Any]:
         """GET a v2 endpoint whose payload must be a JSON object."""
@@ -224,9 +264,9 @@ class AbrpClient:
     ) -> Any:
         """GET a v2 endpoint and return its decoded JSON payload.
 
-        Shared request ladder for the dual-header v2 endpoints: 401/403
-        raises :class:`AbrpAuthError`; any other non-2xx, transport,
-        timeout, or parse failure raises :class:`AbrpApiError` (``what``
+        Shared request ladder for the dual-header v2 endpoints: non-2xx
+        statuses map as in :func:`_http_error`; transport, timeout, or
+        parse failure raises :class:`AbrpApiError` (``what``
         names the endpoint in messages). The token fetch stays OUTSIDE the
         ``(ClientError, TimeoutError)`` band so getter exceptions propagate
         to the caller untouched.
@@ -244,13 +284,8 @@ class AbrpClient:
                 params=params,
                 timeout=ClientTimeout(total=ONE_SHOT_TIMEOUT_SECONDS),
             ) as response:
-                if response.status in (
-                    HTTPStatus.UNAUTHORIZED,
-                    HTTPStatus.FORBIDDEN,
-                ):
-                    raise AbrpAuthError(f"HTTP {response.status}")
                 if response.status >= HTTPStatus.BAD_REQUEST:
-                    raise AbrpApiError(f"HTTP {response.status}")
+                    raise _http_error(response, f"HTTP {response.status}")
                 try:
                     payload: Any = await response.json()
                 except ValueError as err:
@@ -265,6 +300,72 @@ class AbrpClient:
             # handling engaged when the endpoint hangs past the budget.
             raise AbrpApiError(str(err)) from err
         return payload
+
+    async def _post_v2(self, url: str, body: str) -> None:
+        """POST a JSON body to a v2 endpoint; any 2xx is success.
+
+        Redirects are not followed: a followed POST becomes a GET whose 200
+        would look like a successful write.
+        """
+        token = await self._auth.async_get_access_token()
+        headers = {
+            "Content-Type": "application/json",
+            HEADER_API_KEY: self._api_key,
+            HEADER_ABRP_SESSION: token,
+        }
+        try:
+            async with self._websession.post(
+                url,
+                data=body,
+                headers=headers,
+                allow_redirects=False,
+                timeout=ClientTimeout(total=ONE_SHOT_TIMEOUT_SECONDS),
+            ) as response:
+                if HTTPStatus.OK <= response.status < HTTPStatus.MULTIPLE_CHOICES:
+                    return
+                raw = await response.read()
+        except (ClientError, TimeoutError) as err:
+            raise AbrpApiError(str(err)) from err
+        detail = _error_text(raw, (token, self._api_key))
+        message = f"HTTP {response.status}" + (f": {detail}" if detail else "")
+        raise _http_error(response, message, body=detail)
+
+
+def _http_error(response: ClientResponse, message: str, *, body: str = "") -> AbrpError:
+    """Map a non-2xx response to its error.
+
+    401 is a rejected session; 403 ``insufficient_scope`` is AbrpScopeError.
+    Any other 403 comes with a valid session (ABRP answers a bad one with
+    401), so it is AbrpForbiddenError, which reauth would not fix.
+    """
+    if response.status == HTTPStatus.UNAUTHORIZED:
+        return AbrpAuthError(message)
+    if response.status != HTTPStatus.FORBIDDEN:
+        return AbrpApiError(message)
+    challenge = response.headers.get("WWW-Authenticate", "")
+    if "insufficient_scope" not in challenge and "insufficient_scope" not in body:
+        return AbrpForbiddenError(message)
+    scope = _SCOPE_RE.search(challenge)
+    return AbrpScopeError(message, scope.group(1) if scope else None)
+
+
+def _error_text(raw: bytes, secrets: tuple[str, ...]) -> str:
+    """Return ABRP's error message as one short line, secrets redacted.
+
+    ABRP sends ``{"message": "..."}``; other bodies are used as text.
+    """
+    text = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("message"), str):
+        text = payload["message"]
+    text = " ".join(text.split())
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "<redacted>")
+    return text[:200]
 
 
 def _parse_vehicle(item: Any) -> AbrpVehicle:
