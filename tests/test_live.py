@@ -7,8 +7,10 @@ ones explicitly::
     uv run pytest -m live
 
 ``pytest tests/test_live.py`` alone still deselects them; ``-m live`` is
-what opts in. The write test runs only with exactly ``-m live_write`` and
-needs ``ABRP_WRITE_VEHICLE_ID``; it sends the vehicle's current SoC back.
+what opts in. The write tests run only with exactly ``-m live_write``. One
+sends the current SoC of ``ABRP_WRITE_VEHICLE_ID`` (a vehicle in the
+token's garage) back to it; the other checks that a send to a vehicle
+outside the garage is refused as forbidden (ABRP writes nothing).
 
 Credentials: ``ABRP_API_KEY`` (v2 partner key) and ``ABRP_ACCESS_TOKEN``
 (per-user session token), from the environment or the repo-root ``.env``
@@ -36,6 +38,7 @@ import subprocess
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiohttp
@@ -46,6 +49,7 @@ from aioabrp import (
     AbrpApiError,
     AbrpAuthError,
     AbrpClient,
+    AbrpForbiddenError,
     AbrpVehicle,
     ConnectionState,
     Provider,
@@ -65,7 +69,12 @@ AUTH_HINT = (
     "go run . get-access-token"
 )
 WRITE_VEHICLE_VAR = "ABRP_WRITE_VEHICLE_ID"
-LIVE_WRITE_TESTS = {"test_send_current_soc_back"}
+LIVE_WRITE_TESTS = {
+    "test_send_current_soc_back",
+    "test_send_outside_the_garage_is_forbidden",
+}
+# Not in any garage the tests run against; ABRP refuses a send to it.
+FOREIGN_VEHICLE_ID = 999_999_999_999
 LIVE_TESTS = {
     "test_catalog_is_not_empty",
     "test_garage_display_matches_the_display_endpoint",
@@ -359,8 +368,17 @@ async def test_set_vehicle_ids_grow_noop_empty_narrow(
 
 
 @live_write
-async def test_send_current_soc_back(client: AbrpClient) -> None:
+async def test_send_current_soc_back(
+    client: AbrpClient, garage: list[AbrpVehicle]
+) -> None:
     vehicle_id = load_write_vehicle_id(os.environ, ENV_FILE)
+    # ABRP answers the snapshot read of a vehicle outside the garage with
+    # 401, which would read as an expired token; name the real cause instead.
+    _check(
+        vehicle_id in {v.vehicle_id for v in garage},
+        f"{WRITE_VEHICLE_VAR} is not in this token's garage "
+        f"({len(garage)} vehicles); is the token for the right account?",
+    )
     with api_errors("snapshot for the write vehicle", redact=str(vehicle_id)):
         telemetry = await client.async_get_current_telemetry(vehicle_id)
     if telemetry.soc is None or telemetry.soc.time is None:
@@ -372,6 +390,27 @@ async def test_send_current_soc_back(client: AbrpClient) -> None:
     )
     with api_errors("send telemetry", redact=str(vehicle_id)):
         await client.async_send_telemetry(vehicle_id, point)
+
+
+@live_write
+async def test_send_outside_the_garage_is_forbidden(
+    client: AbrpClient, garage: list[AbrpVehicle]
+) -> None:
+    """A valid session sending to a foreign vehicle gets a forbidden, not auth."""
+    _check(
+        FOREIGN_VEHICLE_ID not in {v.vehicle_id for v in garage},
+        "the foreign test vehicle id is in this garage",
+    )
+    point = TelemetryPoint(
+        provider=Provider.APP_OBD, time=datetime.now(UTC), soc_frac=0.5
+    )
+    # api_errors turns any other outcome into a redacted one-line failure.
+    with api_errors("send outside the garage", redact=str(FOREIGN_VEHICLE_ID)):
+        try:
+            await client.async_send_telemetry(FOREIGN_VEHICLE_ID, point)
+        except AbrpForbiddenError:
+            return
+    pytest.fail("ABRP accepted a send to a vehicle outside the garage", pytrace=False)
 
 
 # Normal suite (no network): the opt-in and the credential rules.
