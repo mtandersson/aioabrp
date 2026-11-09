@@ -4,16 +4,23 @@
 
 [changelog]
 header = ""
+# Breaking entries also list their BREAKING CHANGE footer as a nested
+# bullet; a bare `type!:` has no footer text, so it gets none.
 body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}
-- {{ commit.message | split(pat="\n") | first | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{%- set subject = commit.message | split(pat="\n") | first %}
+- {{ subject | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{%- if commit.breaking and commit.breaking_description and commit.breaking_description != subject %}
+  - {{ commit.breaking_description | split(pat="\n") | join(sep=" ") | upper_first }}
+{%- endif %}
 {%- endfor %}
 {% endfor %}
 """
 footer = ""
-trim = true
+# Not trimmed: trim strips each line's indentation and flattens the bullets.
+trim = false
 
 [git]
 conventional_commits = true
