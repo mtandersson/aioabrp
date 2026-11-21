@@ -176,7 +176,7 @@ def test_charging_state_member_mapping(
 
 
 def test_happy_path_all_metrics() -> None:
-    """All 28 metrics extract from one frame with time + provider."""
+    """All 30 metrics extract from one frame with time + provider."""
     extra = {"time": "2026-05-25T12:00:00Z", "provider": "RIVIAN_STREAM"}
     frame: dict[str, Any] = {
         "vehicleId": 1,
@@ -194,6 +194,8 @@ def test_happy_path_all_metrics() -> None:
         "batteryTemperature": {"c": -4.5, **extra},
         "batteryTemperatureMin": {"c": -6.0, **extra},
         "batteryTemperatureMax": {"c": -3.0, **extra},
+        "chargeLimitAc": {"frac": 0.8, **extra},
+        "chargeLimitDc": {"frac": 0.9, **extra},
         "chargingState": {"state": "CHARGING_DC", **extra},
         "location": {"lat": 57.7, "long": 11.97, **extra},
         "cabinSetPoint": {"c": 21.0, **extra},
@@ -235,6 +237,8 @@ def test_happy_path_all_metrics() -> None:
         Metric.BATTERY_TEMPERATURE: -4.5,
         Metric.BATTERY_TEMPERATURE_MIN: -6.0,
         Metric.BATTERY_TEMPERATURE_MAX: -3.0,
+        Metric.CHARGE_LIMIT_AC: pytest.approx(80.0),
+        Metric.CHARGE_LIMIT_DC: pytest.approx(90.0),
         Metric.CHARGING_STATE: ChargingState.CHARGING_DC,
         Metric.LOCATION: Location(lat=57.7, lon=11.97),
         Metric.CABIN_SET_POINT: 21.0,
@@ -577,6 +581,43 @@ def test_added_scalar_metrics(
         assert metric not in result
     else:
         assert result[metric].value == expected
+
+
+@pytest.mark.parametrize(
+    ("metric", "key"),
+    [
+        pytest.param(Metric.CHARGE_LIMIT_AC, "chargeLimitAc", id="ac"),
+        pytest.param(Metric.CHARGE_LIMIT_DC, "chargeLimitDc", id="dc"),
+    ],
+)
+def test_charge_limit_surfaced_as_percent(metric: Metric, key: str) -> None:
+    """Charge limits arrive as a 0-1 ``frac`` and surface x100, like soc."""
+    result = _extract({key: {"frac": 0.8}})
+    assert result[metric].value == pytest.approx(80.0)
+
+
+def test_charge_limit_ac_and_dc_are_independent() -> None:
+    """A frame carrying only one limit omits the other."""
+    result = _extract({"chargeLimitAc": {"frac": 0.8}})
+    assert Metric.CHARGE_LIMIT_AC in result
+    assert Metric.CHARGE_LIMIT_DC not in result
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param(None, id="null_block"),
+        pytest.param({}, id="empty_block"),
+        pytest.param({"frac": None}, id="leaf_null"),
+        pytest.param({"frac": "0.8"}, id="leaf_str"),
+        pytest.param({"frac": True}, id="leaf_bool"),
+        pytest.param({"frac": float("nan")}, id="leaf_nan"),
+    ],
+)
+def test_charge_limit_degenerate_shapes_omitted(block: Any) -> None:
+    result = _extract({"chargeLimitAc": block, "chargeLimitDc": block})
+    assert Metric.CHARGE_LIMIT_AC not in result
+    assert Metric.CHARGE_LIMIT_DC not in result
 
 
 def test_speed_factor_passes_through_unscaled() -> None:

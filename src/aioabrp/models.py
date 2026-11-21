@@ -40,6 +40,8 @@ class Metric(StrEnum):
     CALIBRATED_CONFIDENCE = "calibrated_confidence"
     BATTERY_TEMPERATURE_MIN = "battery_temperature_min"
     BATTERY_TEMPERATURE_MAX = "battery_temperature_max"
+    CHARGE_LIMIT_AC = "charge_limit_ac"
+    CHARGE_LIMIT_DC = "charge_limit_dc"
 
 
 class ChargingState(StrEnum):
@@ -120,7 +122,7 @@ class MetricValue[T]:
     ``Location`` for the GPS pair, ``MapInfo`` for the map-context struct,
     and ``tuple[float, ...]`` for ``calibrated_confidence`` (a 1- or
     4-element array). Units keep the raw ABRP wire scale (no conversion):
-    percent (soc/soh - frac surfaced x100), W (power/hvac_power), V, A
+    percent (soc/soh/charge limits - frac surfaced x100), W (power/hvac_power), V, A
     (current), Wh (soe/battery_capacity/charging_energy_added), m
     (odometer/range/elevation), m/s (speed/calibrated_max_speed),
     degrees (heading), °C (battery incl. min/max cell, cabin and external
@@ -173,6 +175,8 @@ class Telemetry:
     calibrated_confidence: MetricValue[tuple[float, ...]] | None = None
     battery_temperature_min: MetricValue[float] | None = None
     battery_temperature_max: MetricValue[float] | None = None
+    charge_limit_ac: MetricValue[float] | None = None
+    charge_limit_dc: MetricValue[float] | None = None
 
     def items(self) -> Iterator[tuple[Metric, MetricValue[Any]]]:
         """Yield ``(Metric, MetricValue)`` for every present (non-None) field.

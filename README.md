@@ -148,14 +148,14 @@ Each `AbrpVehicle` carries:
 ### Metrics and units
 
 The library surfaces every metric ABRP's v2 telemetry `OutputPoint`
-exposes — a 1:1 mirror of the 28 wire fields — as members of the `Metric`
+exposes — a 1:1 mirror of the 30 wire fields — as members of the `Metric`
 enum, each carrying a `MetricValue[T]`. **Values keep the raw ABRP wire
 scale; the library performs no unit conversion** (rendering is consumer
 policy):
 
 | Metric(s) | `value` type | Unit |
 | --- | --- | --- |
-| `soc`, `soh` | `float` | percent (wire `frac` surfaced ×100; `soh` not clamped) |
+| `soc`, `soh`, `charge_limit_ac`, `charge_limit_dc` | `float` | percent (wire `frac` surfaced ×100; `soh` not clamped) |
 | `power`, `hvac_power` | `float` | W |
 | `voltage` | `float` | V |
 | `current` | `float` | A |
@@ -175,7 +175,7 @@ policy):
 Notes:
 
 - A frame is a **sparse delta**: `Telemetry.items()` yields only the
-  metrics present in that frame, and may yield **any of the 28**.
+  metrics present in that frame, and may yield **any of the 30**.
   Consumers that map `Metric` onto something else (e.g. an entity table)
   must tolerate members they don't handle rather than assume a fixed set.
 - A categorical wire member the library doesn't recognize (an unknown

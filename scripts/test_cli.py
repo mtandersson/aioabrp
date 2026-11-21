@@ -9,7 +9,7 @@ library's surface before merging. Organised as subcommands:
                         none, every garage vehicle's typecode).
     snapshot            One-shot telemetry snapshot per vehicle.
     stream              Stream live telemetry to stdout until Ctrl+C
-                        (the full 28-metric surface).
+                        (the full 30-metric surface).
 
 Credentials come from flags, the environment, or a .env file (never stored in
 this script):

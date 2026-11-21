@@ -20,6 +20,10 @@ Per-metric load-bearing notes (ported with the extractors):
   a post-recalibration overshoot (``frac > 1.0``) is meaningful drift
   downstream statistics are meant to capture, so flattening it would
   lose signal.
+* charge_limit_ac / charge_limit_dc — ``frac`` is the 0.0-1.0 target state
+  of charge at which the vehicle stops AC / DC charging; surfaced x100
+  like soc. The server already drops out-of-range values, so no clamping
+  here.
 * battery_temperature / battery_temperature_min / battery_temperature_max
   — °C with NO lower-bound filter: winter operation (sub-zero pack temps)
   is a real wire shape, not a degenerate one. min / max are the lowest /
@@ -91,6 +95,8 @@ WIRE_KEYS: dict[Metric, str] = {
     Metric.CALIBRATED_CONFIDENCE: "calibratedConfidence",
     Metric.BATTERY_TEMPERATURE_MIN: "batteryTemperatureMin",
     Metric.BATTERY_TEMPERATURE_MAX: "batteryTemperatureMax",
+    Metric.CHARGE_LIMIT_AC: "chargeLimitAc",
+    Metric.CHARGE_LIMIT_DC: "chargeLimitDc",
 }
 
 # Numeric leaf key under each metric's wire block (units in the module
@@ -122,13 +128,17 @@ _NUMERIC_LEAF_KEYS: dict[Metric, str] = {
     Metric.SPEED_FACTOR: "frac",
     Metric.BATTERY_TEMPERATURE_MIN: "c",
     Metric.BATTERY_TEMPERATURE_MAX: "c",
+    Metric.CHARGE_LIMIT_AC: "frac",
+    Metric.CHARGE_LIMIT_DC: "frac",
 }
 
 # Metrics whose wire leaf is a 0.0-1.0 fraction surfaced x100 (soh
 # deliberately unclamped — see the module docstring). speed_factor and
 # calibrated_confidence also carry a ``frac`` leaf but are intentionally
 # absent here: they are raw multipliers/confidences, not percentages.
-_FRACTION_METRICS = frozenset({Metric.SOC, Metric.SOH})
+_FRACTION_METRICS = frozenset(
+    {Metric.SOC, Metric.SOH, Metric.CHARGE_LIMIT_AC, Metric.CHARGE_LIMIT_DC}
+)
 
 # Wire enum member -> ChargingState for the categorical ``chargingState``
 # field. Closed-enum: every member ABRP's v2 spec emits has an entry
