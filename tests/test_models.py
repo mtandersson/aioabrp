@@ -70,6 +70,8 @@ def test_metric_values_match_registry_keys() -> None:
         "calibrated_confidence",
         "battery_temperature_min",
         "battery_temperature_max",
+        "charge_limit_ac",
+        "charge_limit_dc",
     }
 
 

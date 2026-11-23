@@ -18,11 +18,11 @@ library consumes (``OutputPoint`` for one-shot telemetry payloads,
   chargingEnergyAdded, current, drivingState, elevation,
   externalTemperature, heading, hvacPower, speed, speedFactor,
   calibratedConfidence, mapInfo, batteryTemperatureMin,
-  batteryTemperatureMax;
+  batteryTemperatureMax, chargeLimitAc, chargeLimitDc;
 * ``location`` — carried on the SSE wire and consumed by the
   :attr:`aioabrp.Metric.LOCATION` extractor in :mod:`aioabrp._extract`.
 
-That's 28 surfaced keys → 28 leaf+Output pairs + the mixin chain
+That's 30 surfaced keys → 30 leaf+Output pairs + the mixin chain
 (``WithTime``, ``WithTimeAndProvider``, ``Provider``, ``DateTimeString``)
 + a handful of numeric type aliases (plus the ``ChargingStateValue`` /
 ``DrivingStateValue`` / ``Region`` enum aliases for the categorical
@@ -120,6 +120,7 @@ class WithTimeAndProvider(WithTime):
 type Lat = float
 type Long = float
 type FracWiggle = float
+type Frac = float
 type EnergyWh = float
 type PowerW = float
 type TemperatureC = float
@@ -169,6 +170,22 @@ class BatteryTemperatureMax(TypedDict):
 
 
 class BatteryTemperatureMaxOutput(WithTimeAndProvider, BatteryTemperatureMax):
+    pass
+
+
+class ChargeLimitAc(TypedDict):
+    frac: Frac
+
+
+class ChargeLimitAcOutput(WithTimeAndProvider, ChargeLimitAc):
+    pass
+
+
+class ChargeLimitDc(TypedDict):
+    frac: Frac
+
+
+class ChargeLimitDcOutput(WithTimeAndProvider, ChargeLimitDc):
     pass
 
 
@@ -399,6 +416,8 @@ class OutputPoint(TypedDict):
     calibratedConfidence: NotRequired[CalibratedConfidenceOutput]
     calibratedMaxSpeed: NotRequired[MaxSpeedOutput]
     calibratedRefCons: NotRequired[CalibratedRefConsOutput]
+    chargeLimitAc: NotRequired[ChargeLimitAcOutput]
+    chargeLimitDc: NotRequired[ChargeLimitDcOutput]
     chargingEnergyAdded: NotRequired[ChargingEnergyAddedOutput]
     chargingState: NotRequired[ChargingStateOutput]
     current: NotRequired[CurrentOutput]
