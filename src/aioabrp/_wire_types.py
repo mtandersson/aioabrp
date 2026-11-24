@@ -107,6 +107,8 @@ type Provider = Literal[
     "DERIVED",
     "CARSCANNER",
     "ABRP_OTA",
+    "BYD_TRACKER",
+    "HOME_ASSISTANT",
 ]
 
 

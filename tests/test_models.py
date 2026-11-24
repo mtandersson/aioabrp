@@ -19,6 +19,7 @@ from aioabrp import (
     MapInfo,
     Metric,
     MetricValue,
+    Provider,
     Region,
     StaticAuth,
     Telemetry,
@@ -38,6 +39,19 @@ def test_exception_hierarchy() -> None:
     assert issubclass(AbrpAuthError, AbrpError)
     assert issubclass(AbrpApiError, AbrpError)
     assert issubclass(AbrpError, Exception)
+
+
+def test_provider_members_match_spec() -> None:
+    """Mirrors the spec's InputPoint.provider enum."""
+    assert {p.value for p in Provider} == {
+        "APP_LOCATION",
+        "APP_OBD",
+        "APP_AUTOMOTIVE",
+        "APP_AUTO",
+        "ABRP_OTA",
+        "BYD_TRACKER",
+        "HOME_ASSISTANT",
+    }
 
 
 def test_metric_values_match_registry_keys() -> None:
