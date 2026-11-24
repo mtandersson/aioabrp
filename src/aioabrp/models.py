@@ -332,6 +332,8 @@ class Provider(StrEnum):
     APP_AUTOMOTIVE = "APP_AUTOMOTIVE"
     APP_AUTO = "APP_AUTO"
     ABRP_OTA = "ABRP_OTA"
+    BYD_TRACKER = "BYD_TRACKER"
+    HOME_ASSISTANT = "HOME_ASSISTANT"
 
 
 # Field -> (InputPoint metric key, unit key).
