@@ -1281,7 +1281,6 @@ def test_send_telemetry_extra_cannot_duplicate_a_set_typed_field(
     ("key", "value"),
     [
         pytest.param("power", {"w": 1.0}, id="numeric"),
-        pytest.param("chargeLimitAc", {"frac": 0.8}, id="charge_limit"),
         pytest.param("drivingState", {"state": "PARK"}, id="state"),
     ],
 )

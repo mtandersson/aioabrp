@@ -298,9 +298,9 @@ await client.async_send_telemetry(vehicle_id, point)
 - **One time for all metrics.** `time` must be timezone-aware and is sent as
   UTC.
 - **Units are in the field names** and are ABRP's wire units, sent
-  unconverted: `soc_frac`, `charge_limit_ac_frac` and `charge_limit_dc_frac`
-  are fractions (0.55 = 55 %; the read side's `Telemetry.soc` and charge
-  limits are percent), then W, V, A, Wh, m, m/s (`speed_ms`), degrees and °C.
+  unconverted: `*_frac` fields are fractions (0.55 = 55 %; the read side's
+  `Telemetry.soc`, `.soh` and `.charge_limit_ac` / `_dc` are percent), then
+  W, V, A, Wh, m, m/s (`speed_ms`), degrees and °C.
   Unset fields are not sent. Metrics ABRP computes itself (map info,
   calibrated values, speed factor) cannot be sent.
 - **Newer spec fields** go in `extra`, which is added to the request body
