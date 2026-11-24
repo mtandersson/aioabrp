@@ -358,6 +358,8 @@ _NUMERIC_WIRE: dict[str, tuple[str, str]] = {
     "cabin_temperature_c": ("cabinTemperature", "c"),
     "cabin_set_point_c": ("cabinSetPoint", "c"),
     "external_temperature_c": ("externalTemperature", "c"),
+    "charge_limit_ac_frac": ("chargeLimitAc", "frac"),
+    "charge_limit_dc_frac": ("chargeLimitDc", "frac"),
 }
 _STATE_WIRE: dict[str, tuple[str, type[StrEnum]]] = {
     "charging_state": ("chargingState", ChargingState),
@@ -425,6 +427,8 @@ class TelemetryPoint:
     driving_state: DrivingState | None = None
     location: Location | None = field(default=None, repr=False)
     extra: Mapping[str, Any] = field(default_factory=dict, repr=False, hash=False)
+    charge_limit_ac_frac: float | None = None
+    charge_limit_dc_frac: float | None = None
 
     def __post_init__(self) -> None:
         """Check types and copy ``extra``."""
