@@ -1254,10 +1254,40 @@ async def test_send_telemetry_extra_only_point(
     }
 
 
-@pytest.mark.parametrize("key", ["soc", "chargingState", "location", "provider"])
-def test_send_telemetry_extra_cannot_override_typed_fields(key: str) -> None:
+@pytest.mark.parametrize(
+    ("key", "typed"),
+    [
+        pytest.param("power", {"power_w": 1.0}, id="numeric"),
+        pytest.param(
+            "chargingState", {"charging_state": ChargingState.CHARGING_AC}, id="state"
+        ),
+        pytest.param("location", {"location": Location(59.3, 18.0)}, id="location"),
+        pytest.param("provider", {}, id="provider"),
+    ],
+)
+def test_send_telemetry_extra_cannot_duplicate_a_set_typed_field(
+    key: str, typed: dict[str, Any]
+) -> None:
     with pytest.raises(ValueError, match=key):
-        soc_point(extra={key: {"x": 1}})
+        soc_point(**typed, extra={key: {"x": 1}})
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        pytest.param("power", {"w": 1.0}, id="numeric"),
+        pytest.param("drivingState", {"state": "PARK"}, id="state"),
+    ],
+)
+async def test_send_telemetry_extra_may_carry_an_unset_typed_key(
+    client: AbrpClient, mock_api: aioresponses, key: str, value: dict[str, Any]
+) -> None:
+    """An extra key whose typed field is unset is sent as-is."""
+    mock_api.post(SEND_URL)
+
+    await client.async_send_telemetry(VEHICLE_ID, soc_point(extra={key: value}))
+
+    assert sent_body(mock_api)[key] == {**value, "time": SEND_AT_WIRE}
 
 
 @pytest.mark.parametrize(
