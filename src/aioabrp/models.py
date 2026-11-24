@@ -361,11 +361,13 @@ _STATE_WIRE: dict[str, tuple[str, type[StrEnum]]] = {
     "charging_state": ("chargingState", ChargingState),
     "driving_state": ("drivingState", DrivingState),
 }
-_RESERVED_WIRE_KEYS = frozenset(
-    {"provider", "location"}
-    | {key for key, _ in _NUMERIC_WIRE.values()}
-    | {key for key, _ in _STATE_WIRE.values()}
-)
+# InputPoint key -> the typed field that sends it.
+_WIRE_FIELDS: dict[str, str] = {
+    "provider": "provider",
+    "location": "location",
+    **{key: name for name, (key, _) in _NUMERIC_WIRE.items()},
+    **{key: name for name, (key, _) in _STATE_WIRE.items()},
+}
 
 
 def _check_number(name: str, value: object) -> None:
@@ -455,14 +457,21 @@ class TelemetryPoint:
         for key in self.extra:
             if not isinstance(key, str):
                 raise TypeError("extra keys must be str")
-            if key in _RESERVED_WIRE_KEYS:
-                raise ValueError(f"extra key {key!r} is a typed field; set it there")
+            if self._sets_wire_key(key):
+                raise ValueError(
+                    f"extra key {key!r} is also set as {_WIRE_FIELDS[key]}"
+                )
         if not has_metric and not self.extra:
             raise ValueError("a point needs at least one metric or extra entry")
         copied = copy.deepcopy(
             {k: dict(v) if isinstance(v, Mapping) else v for k, v in self.extra.items()}
         )
         object.__setattr__(self, "extra", copied)
+
+    def _sets_wire_key(self, key: str) -> bool:
+        """Return whether a typed field already sends ``key``."""
+        name = _WIRE_FIELDS.get(key)
+        return name is not None and getattr(self, name) is not None
 
     def _to_wire(self) -> dict[str, Any]:
         """Return the ``InputPoint`` JSON body for this point."""
@@ -483,7 +492,7 @@ class TelemetryPoint:
                 "time": time,
             }
         for key, value in self.extra.items():
-            if key in _RESERVED_WIRE_KEYS:  # typed fields win
+            if self._sets_wire_key(key):  # typed fields win
                 continue
             body[key] = {"time": time, **value} if isinstance(value, dict) else value
         return body

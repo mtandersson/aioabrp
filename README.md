@@ -304,8 +304,9 @@ await client.async_send_telemetry(vehicle_id, point)
   calibrated values, speed factor) cannot be sent.
 - **Newer spec fields** go in `extra`, which is added to the request body
   as-is. A mapping value without a `"time"` gets the point's time. A key
-  that names a typed field (or `provider`) raises `ValueError`. `provider`
-  also accepts a plain string for a provider newer than the `Provider` enum.
+  whose typed field is also set raises `ValueError`, so `provider` always
+  does. `provider` also accepts a plain string for a provider newer than the
+  `Provider` enum.
 - **Types are checked when the point is built:** a `bool`, a non-finite
   number or a string where a number or enum belongs raises, and so does a
   point with no metric and no `extra`. Ranges are left to ABRP: its HTTP 400
