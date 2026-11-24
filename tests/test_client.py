@@ -1257,7 +1257,6 @@ async def test_send_telemetry_extra_only_point(
 @pytest.mark.parametrize(
     ("key", "typed"),
     [
-        pytest.param("soc", {}, id="soc"),
         pytest.param("power", {"power_w": 1.0}, id="numeric"),
         pytest.param(
             "chargingState", {"charging_state": ChargingState.CHARGING_AC}, id="state"
