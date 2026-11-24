@@ -1167,6 +1167,8 @@ async def test_send_telemetry_maps_every_field_to_the_spec(
         charging_state=ChargingState.NOT_CHARGING,
         driving_state=DrivingState.DRIVE,
         location=Location(-33.9, 151.2),
+        charge_limit_ac_frac=0.8,
+        charge_limit_dc_frac=0.9,
     )
 
     await client.async_send_telemetry(VEHICLE_ID, point)
@@ -1197,6 +1199,8 @@ async def test_send_telemetry_maps_every_field_to_the_spec(
         "chargingState": {"state": "NOT_CHARGING", "time": t},
         "drivingState": {"state": "DRIVE", "time": t},
         "location": {"lat": -33.9, "long": 151.2, "time": t},
+        "chargeLimitAc": {"frac": 0.8, "time": t},
+        "chargeLimitDc": {"frac": 0.9, "time": t},
     }
 
 
@@ -1258,6 +1262,7 @@ async def test_send_telemetry_extra_only_point(
     ("key", "typed"),
     [
         pytest.param("power", {"power_w": 1.0}, id="numeric"),
+        pytest.param("chargeLimitAc", {"charge_limit_ac_frac": 0.8}, id="charge_limit"),
         pytest.param(
             "chargingState", {"charging_state": ChargingState.CHARGING_AC}, id="state"
         ),
@@ -1276,6 +1281,7 @@ def test_send_telemetry_extra_cannot_duplicate_a_set_typed_field(
     ("key", "value"),
     [
         pytest.param("power", {"w": 1.0}, id="numeric"),
+        pytest.param("chargeLimitAc", {"frac": 0.8}, id="charge_limit"),
         pytest.param("drivingState", {"state": "PARK"}, id="state"),
     ],
 )
